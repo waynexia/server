@@ -54,7 +54,8 @@ Item_subselect::Item_subselect(THD *thd_arg):
   value_assigned(0), own_engine(0), thd(0), old_engine(0),
   have_to_be_excluded(0),
   inside_first_fix_fields(0), done_first_fix_fields(FALSE), 
-  expr_cache(0), forced_const(FALSE), substitution(0), engine(0), eliminated(FALSE),
+  expr_cache(0), forced_const(FALSE), expensive_fl(FALSE),
+  substitution(0), engine(0), eliminated(FALSE),
   changed(0), is_correlated(FALSE), with_recursive_reference(0)
 {
   DBUG_ENTER("Item_subselect::Item_subselect");
@@ -585,6 +586,9 @@ bool Item_subselect::is_expensive()
   double examined_rows= 0;
   bool all_are_simple= true;
 
+  if (!expensive_fl && is_evaluated())
+    return false;
+
   /* check extremely simple select */
   if (!unit->first_select()->next_select()) // no union
   {
@@ -595,7 +599,7 @@ bool Item_subselect::is_expensive()
     SELECT_LEX *sl= unit->first_select();
     JOIN *join = sl->join;
     if (join && !join->tables_list && !sl->first_inner_unit())
-      return false;
+      return (expensive_fl= false);
   }
 
 
@@ -605,14 +609,14 @@ bool Item_subselect::is_expensive()
 
     /* not optimized subquery */
     if (!cur_join)
-      return true;
+      return (expensive_fl= true);
 
     /*
       If the subquery is not optimised or in the process of optimization
       it supposed to be expensive
     */
     if (cur_join->optimization_state != JOIN::OPTIMIZATION_DONE)
-      return true;
+      return (expensive_fl= true);
 
     if (!cur_join->tables_list && !sl->first_inner_unit())
       continue;
@@ -634,7 +638,7 @@ bool Item_subselect::is_expensive()
       considered optimized if it has a join plan.
     */
     if (!cur_join->join_tab)
-      return true;
+      return (expensive_fl= true);
 
     if (sl->first_inner_unit())
     {
@@ -642,15 +646,15 @@ bool Item_subselect::is_expensive()
         Subqueries that contain subqueries are considered expensive.
         @todo: accumulate the cost of subqueries.
       */
-      return true;
+      return (expensive_fl= true);
     }
 
     examined_rows+= cur_join->get_examined_rows();
   }
 
   // here we are sure that subquery is optimized so thd is set
-  return !all_are_simple &&
-    (examined_rows > thd->variables.expensive_subquery_limit);
+  return (expensive_fl= !all_are_simple &&
+	   (examined_rows > thd->variables.expensive_subquery_limit));
 }
 
 
@@ -5872,12 +5876,16 @@ Ordered_key::cmp_keys_by_row_data_and_rownum(Ordered_key *key,
 }
 
 
-void Ordered_key::sort_keys()
+bool Ordered_key::sort_keys()
 {
+  if (tbl->file->ha_rnd_init_with_error(0))
+    return TRUE;
   my_qsort2(key_buff, (size_t) key_buff_elements, sizeof(rownum_t),
             (qsort2_cmp) &cmp_keys_by_row_data_and_rownum, (void*) this);
   /* Invalidate the current row position. */
   cur_key_idx= HA_POS_ERROR;
+  tbl->file->ha_rnd_end();
+  return FALSE;
 }
 
 
@@ -6325,7 +6333,8 @@ subselect_rowid_merge_engine::init(MY_BITMAP *non_null_key_parts,
 
   /* Sort the keys in each of the indexes. */
   for (uint i= 0; i < merge_keys_count; i++)
-    merge_keys[i]->sort_keys();
+    if (merge_keys[i]->sort_keys())
+      return TRUE;
 
   if (init_queue(&pq, merge_keys_count, 0, FALSE,
                  subselect_rowid_merge_engine::cmp_keys_by_cur_rownum, NULL,

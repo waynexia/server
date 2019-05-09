@@ -199,11 +199,13 @@ let $cleanup_stmt1= alter event e1 comment '';
 --echo #
 --echo # 2) ANALYZE TABLE statement is compatible with FTWRL.
 --echo # See Bug#43336 ANALYZE and OPTIMIZE do not honour
---echo #  --read-only for a discussion why.
+--echo #  --read-only as they update status tables.
 --echo #
+let $skip_3rd_check= 1;
 let $statement= analyze table t1_base;
 let $cleanup_stmt= ;
---source include/check_ftwrl_compatible.inc
+--source include/check_ftwrl_incompatible.inc
+let $skip_3rd_check= ;
 
 --echo #
 --echo # 3) BEGIN, ROLLBACK and COMMIT statements.
@@ -1712,7 +1714,7 @@ set autocommit= 1;
 --echo # 39.1.a) ANALYZE TABLE for transactional table is incompatible with
 --echo #         FTWRL.
 flush tables with read lock;
---echo # Implicit commits are allowed under FTWRL.
+--error ER_CANT_UPDATE_WITH_READLOCK
 analyze table t3_trans;
 unlock tables;
 --echo #
@@ -2021,6 +2023,9 @@ set global sql_mode=default;
 --echo # Deadlock between FTWRL under open handler and DDL/LOCK TABLES
 --echo #
 CREATE TABLE t1(a INT);
+
+--echo #
+connect (con3,localhost,root,,);
 HANDLER t1 OPEN;
 
 --echo #
@@ -2039,7 +2044,11 @@ disconnect con2;
 connection default;
 FLUSH TABLES WITH READ LOCK;
 UNLOCK TABLES;
+
+--echo #
+connection con3;
 HANDLER t1 CLOSE;
+disconnect con3;
 
 --echo #
 connection con1;
@@ -2084,4 +2093,41 @@ disconnect con1;
 --echo #
 connection default;
 DROP TABLE t1;
+SET DEBUG_SYNC= 'RESET';
+
+--echo #
+--echo # MDEV-19384 Deadlock between FTWRL under open HANDLER, LOCK TABLE
+--echo # and DROP DATABASE
+--echo #
+
+CREATE DATABASE mysqltest;
+CREATE TABLE mysqltest.t1(a INT);
+HANDLER mysqltest.t1 OPEN as t1;
+
+connect (con1,localhost,root,,);
+SET DEBUG_SYNC= 'mdl_acquire_lock_wait SIGNAL ready';
+--send LOCK TABLE mysqltest.t1 WRITE
+connect (con2,localhost,root,,);
+SET DEBUG_SYNC= 'now WAIT_FOR ready';
+SET DEBUG_SYNC= 'mdl_acquire_lock_wait SIGNAL ready';
+--send DROP DATABASE mysqltest
+
+connect (con3,localhost,root,,);
+SET DEBUG_SYNC= 'now WAIT_FOR ready';
+disconnect con3;
+
+connection default;
+FLUSH TABLES WITH READ LOCK;
+UNLOCK TABLES;
+HANDLER t1 CLOSE;
+connection con1;
+
+--error 0,ER_NO_SUCH_TABLE
+reap;
+UNLOCK TABLES;
+disconnect con1;
+connection con2;
+reap;
+disconnect con2;
+connection default;
 SET DEBUG_SYNC= 'RESET';

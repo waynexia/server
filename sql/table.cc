@@ -2212,7 +2212,8 @@ int TABLE_SHARE::init_from_binary_frm_image(THD *thd, bool write,
           goto err;
         vcol_info= new (&share->mem_root) Virtual_column_info();
         uint vcol_info_length= uint2korr(vcol_screen_pos + 1);
-        DBUG_ASSERT(vcol_info_length);
+        if (!vcol_info_length) // Expect non-empty expression
+          goto err;
         vcol_info->stored_in_db= vcol_screen_pos[3];
         vcol_info->utf8= 0;
         vcol_screen_pos+= vcol_info_length + MYSQL57_GCOL_HEADER_SIZE;;
@@ -2690,7 +2691,7 @@ int TABLE_SHARE::init_from_binary_frm_image(THD *thd, bool write,
           field->key_start.set_bit(key);
         if (field->key_length() == key_part->length &&
             !(field->flags & BLOB_FLAG) &&
-            key_info->algorithm != HA_KEY_ALG_LONG_HASH)
+            keyinfo->algorithm != HA_KEY_ALG_LONG_HASH)
         {
           if (handler_file->index_flags(key, i, 0) & HA_KEYREAD_ONLY)
           {
@@ -7638,6 +7639,26 @@ bool TABLE::add_tmp_key(uint key, uint key_parts,
     key_part_info++;
   }
 
+  /*
+    For the case when there is a derived table that would give distinct rows,
+    the index statistics are passed to the join optimizer to tell that a ref
+    access to all the fields of the derived table will produce only one row.
+  */
+
+  st_select_lex_unit* derived= pos_in_table_list ?
+                               pos_in_table_list->derived: NULL;
+  if (derived)
+  {
+    st_select_lex* first= derived->first_select();
+    uint select_list_items= first->get_item_list()->elements;
+    if (key_parts == select_list_items)
+    {
+      if ((!first->is_part_of_union() && (first->options & SELECT_DISTINCT)) ||
+          derived->check_distinct_in_union())
+        keyinfo->rec_per_key[key_parts - 1]= 1;
+    }
+  }
+
   set_if_bigger(s->max_key_length, keyinfo->key_length);
   s->keys++;
   return FALSE;
@@ -8080,10 +8101,10 @@ public:
 
 
 /*
-  to satisfy ASSERT_COLUMN_MARKED_FOR_WRITE Field's assert we temporarily
+  to satisfy marked_for_write_or_computed() Field's assert we temporarily
   mark field for write before storing the generated value in it
 */
-#ifndef DBUG_OFF
+#ifdef DBUG_ASSERT_EXISTS
 #define DBUG_FIX_WRITE_SET(f) bool _write_set_fixed= !bitmap_fast_test_and_set(write_set, (f)->field_index)
 #define DBUG_RESTORE_WRITE_SET(f) if (_write_set_fixed) bitmap_clear_bit(write_set, (f)->field_index)
 #else
@@ -9014,6 +9035,8 @@ void re_setup_keyinfo_hash(KEY *key_info)
 */
 void TABLE::clone_handler_for_update()
 {
+  if (this->update_handler)
+    return;
   handler *update_handler= NULL;
   if (!s->long_unique_table)
     return;
@@ -9409,6 +9432,7 @@ bool vers_select_conds_t::eq(const vers_select_conds_t &conds) const
     return true;
   case SYSTEM_TIME_BEFORE:
     DBUG_ASSERT(0);
+    return false;
   case SYSTEM_TIME_AS_OF:
     return start.eq(conds.start);
   case SYSTEM_TIME_FROM_TO:
