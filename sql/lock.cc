@@ -253,16 +253,11 @@ static void track_table_access(THD *thd, TABLE **tables, size_t count)
 {
   if (thd->variables.session_track_transaction_info > TX_TRACK_NONE)
   {
-    Transaction_state_tracker *tst= (Transaction_state_tracker *)
-      thd->session_tracker.get_tracker(TRANSACTION_INFO_TRACKER);
-
     while (count--)
     {
-      TABLE *t= tables[count];
-
-      if (t)
-        tst->add_trx_state(thd,  t->reginfo.lock_type,
-                           t->file->has_transaction_manager());
+      if (TABLE *t= tables[count])
+        thd->session_tracker.transaction_info.add_trx_state(thd,
+          t->reginfo.lock_type, t->file->has_transaction_manager());
     }
   }
 }
@@ -1034,6 +1029,10 @@ bool Global_read_lock::lock_global_read_lock(THD *thd)
       DBUG_RETURN(1);
     }
 
+    /*
+      Release HANDLER OPEN by the current THD as they may cause deadlocks
+      if another thread is trying to simultaneous drop the table
+    */
     mysql_ha_cleanup_no_free(thd);
 
     DBUG_ASSERT(! thd->mdl_context.is_lock_owner(MDL_key::BACKUP, "", "",

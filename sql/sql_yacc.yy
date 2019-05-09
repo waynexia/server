@@ -1932,7 +1932,8 @@ bool my_yyoverflow(short **a, YYSTYPE **b, size_t *yystacksize);
 %type <table_list>
         join_table_list  join_table
         table_factor table_ref esc_table_ref
-        table_primary_ident table_primary_derived
+        table_primary_ident table_primary_ident_opt_parens
+        table_primary_derived table_primary_derived_opt_parens
         derived_table_list table_reference_list_parens
         nested_table_reference_list join_table_parens
         update_table_list
@@ -9415,6 +9416,7 @@ for_portion_of_time_clause:
                                         Vers_history_point(VERS_TIMESTAMP, $9),
                                         $5);
           }
+        ;
 
 opt_for_portion_of_time_clause:
           /* empty */
@@ -12058,10 +12060,20 @@ use_partition:
         ;
 
 table_factor:
-          table_primary_ident { $$= $1; }
-        | table_primary_derived { $$= $1; }
+          table_primary_ident_opt_parens { $$= $1; }
+        | table_primary_derived_opt_parens { $$= $1; }
         | join_table_parens { $$= $1; }
         | table_reference_list_parens { $$= $1; }
+        ;
+
+table_primary_ident_opt_parens:
+          table_primary_ident { $$= $1; }
+        | '(' table_primary_ident_opt_parens ')' { $$= $2; }
+        ;
+
+table_primary_derived_opt_parens:
+          table_primary_derived { $$= $1; }
+        | '(' table_primary_derived_opt_parens ')' { $$= $2; }
         ;
 
 table_reference_list_parens:
@@ -12652,7 +12664,7 @@ limit_clause:
           {
             $$.select_limit= 0;
             $$.offset_limit= 0;
-            $$.explicit_limit= 1;
+            $$.explicit_limit= 0;
             Lex->set_stmt_unsafe(LEX::BINLOG_STMT_UNSAFE_LIMIT);
           }
         ;

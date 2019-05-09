@@ -72,7 +72,11 @@ Created 10/21/1995 Heikki Tuuri
 
 #ifdef _WIN32
 #include <winioctl.h>
+#else
+// my_test_if_atomic_write()
+#include <my_sys.h>
 #endif
+
 
 /** Insert buffer segment id */
 static const ulint IO_IBUF_SEGMENT = 0;
@@ -1841,10 +1845,24 @@ LinuxAIOHandler::collect()
 			will be done in the calling function. */
 			m_array->acquire();
 
-			slot->ret = events[i].res2;
+			/* events[i].res2 should always be ZERO */
+			ut_ad(events[i].res2 == 0);
 			slot->io_already_done = true;
-			slot->n_bytes = events[i].res;
 
+			/*Even though events[i].res is an unsigned number
+			in libaio, it is used to return a negative value
+			(negated errno value) to indicate error and a positive
+			value to indicate number of bytes read or written. */
+
+			if (events[i].res > slot->len) {
+				/* failure */
+				slot->n_bytes = 0;
+				slot->ret = events[i].res;
+			} else {
+				/* success */
+				slot->n_bytes = events[i].res;
+				slot->ret = 0;
+			}
 			m_array->release();
 		}
 
@@ -7488,6 +7506,75 @@ os_file_set_umask(ulint umask)
 	os_innodb_umask = umask;
 }
 
+#ifdef _WIN32
+static int win32_get_block_size(HANDLE volume_handle, const char *volume_name)
+{
+  STORAGE_ACCESS_ALIGNMENT_DESCRIPTOR disk_alignment;
+  STORAGE_PROPERTY_QUERY storage_query;
+  DWORD tmp;
+
+  memset(&storage_query, 0, sizeof(storage_query));
+  storage_query.PropertyId = StorageAccessAlignmentProperty;
+  storage_query.QueryType = PropertyStandardQuery;
+
+  if (os_win32_device_io_control(volume_handle,
+    IOCTL_STORAGE_QUERY_PROPERTY,
+    &storage_query,
+    sizeof storage_query,
+    &disk_alignment,
+    sizeof disk_alignment,
+    &tmp) &&  tmp == sizeof disk_alignment) {
+      return disk_alignment.BytesPerPhysicalSector;
+  }
+
+  switch (GetLastError()) {
+    case ERROR_INVALID_FUNCTION:
+    case ERROR_NOT_SUPPORTED:
+      break;
+    default:
+      os_file_handle_error_no_exit(
+        volume_name,
+        "DeviceIoControl(IOCTL_STORAGE_QUERY_PROPERTY / StorageAccessAlignmentProperty)",
+        FALSE);
+   }
+   return 512;
+}
+
+static bool win32_is_ssd(HANDLE volume_handle)
+{
+  DWORD tmp;
+  DEVICE_SEEK_PENALTY_DESCRIPTOR seek_penalty;
+  STORAGE_PROPERTY_QUERY storage_query;
+  memset(&storage_query, 0, sizeof(storage_query));
+
+  storage_query.PropertyId = StorageDeviceSeekPenaltyProperty;
+  storage_query.QueryType = PropertyStandardQuery;
+
+  if (os_win32_device_io_control(volume_handle,
+    IOCTL_STORAGE_QUERY_PROPERTY,
+    &storage_query,
+    sizeof storage_query,
+    &seek_penalty,
+    sizeof seek_penalty,
+    &tmp) && tmp == sizeof(seek_penalty)){
+      return !seek_penalty.IncursSeekPenalty;
+  }
+
+  DEVICE_TRIM_DESCRIPTOR trim;
+  storage_query.PropertyId = StorageDeviceTrimProperty;
+  if (os_win32_device_io_control(volume_handle,
+    IOCTL_STORAGE_QUERY_PROPERTY,
+    &storage_query,
+    sizeof storage_query,
+    &trim,
+    sizeof trim,
+    &tmp) && tmp == sizeof trim) {
+      return trim.TrimEnabled;
+  }
+  return false;
+}
+#endif
+
 /** Determine some file metadata when creating or reading the file.
 @param	file	the file that is being created, or OS_FILE_CLOSED */
 void fil_node_t::find_metadata(os_file_t file
@@ -7545,66 +7632,9 @@ void fil_node_t::find_metadata(os_file_t file
 		0, OPEN_EXISTING, 0, 0);
 
 	if (volume_handle != INVALID_HANDLE_VALUE) {
-		DWORD tmp;
-		union {
-			STORAGE_ACCESS_ALIGNMENT_DESCRIPTOR disk_alignment;
-			DEVICE_SEEK_PENALTY_DESCRIPTOR seek_penalty;
-		} result;
-		STORAGE_PROPERTY_QUERY storage_query;
-		memset(&storage_query, 0, sizeof(storage_query));
-		storage_query.PropertyId = StorageAccessAlignmentProperty;
-		storage_query.QueryType  = PropertyStandardQuery;
-
-		if (!os_win32_device_io_control(volume_handle,
-						IOCTL_STORAGE_QUERY_PROPERTY,
-						&storage_query,
-						sizeof storage_query,
-						&result.disk_alignment,
-						sizeof result.disk_alignment,
-						&tmp)
-		    || tmp < sizeof result.disk_alignment) {
-			switch (GetLastError()) {
-			case ERROR_INVALID_FUNCTION:
-			case ERROR_NOT_SUPPORTED:
-				break;
-			default:
-			ioctl_fail:
-				os_file_handle_error_no_exit(
-					volume,
-					"DeviceIoControl(IOCTL_STORAGE_QUERY_PROPERTY)",
-					FALSE);
-			}
-			goto end;
-		}
-
-		block_size = result.disk_alignment.BytesPerPhysicalSector;
-
-		storage_query.PropertyId = StorageDeviceSeekPenaltyProperty;
-		storage_query.QueryType  = PropertyStandardQuery;
-
-		if (!os_win32_device_io_control(volume_handle,
-						IOCTL_STORAGE_QUERY_PROPERTY,
-						&storage_query,
-						sizeof storage_query,
-						&result.seek_penalty,
-						sizeof result.seek_penalty,
-						&tmp)
-		    || tmp < sizeof result.seek_penalty) {
-			switch (GetLastError()) {
-			case ERROR_INVALID_FUNCTION:
-			case ERROR_NOT_SUPPORTED:
-			case ERROR_GEN_FAILURE:
-				goto end;
-			default:
-				goto ioctl_fail;
-			}
-		}
-
-		on_ssd = !result.seek_penalty.IncursSeekPenalty;
-end:
-		if (volume_handle != INVALID_HANDLE_VALUE) {
-			CloseHandle(volume_handle);
-		}
+		block_size = win32_get_block_size(volume_handle, volume);
+		on_ssd = win32_is_ssd(volume_handle);
+		CloseHandle(volume_handle);
 	} else {
 		if (GetLastError() != ERROR_ACCESS_DENIED) {
 			os_file_handle_error_no_exit(volume,
@@ -7635,11 +7665,19 @@ end:
 	if (!space->atomic_write_supported) {
 		space->atomic_write_supported = atomic_write
 			&& srv_use_atomic_writes
-#ifdef _WIN32
+#ifndef _WIN32
 			&& my_test_if_atomic_write(file,
 						   space->physical_size())
 #else
+			/* On Windows, all single sector writes are atomic,
+			as per WriteFile() documentation on MSDN.
+			We also require SSD for atomic writes, eventhough
+			technically it is not necessary- the reason is that
+			on hard disks, we still want the benefit from
+			(non-atomic) neighbor page flushing in the buffer
+			pool code. */
 			&& srv_page_size == block_size
+			&& on_ssd
 #endif
 			;
 	}
@@ -7678,7 +7716,7 @@ bool fil_node_t::read_page0(bool first)
 	/* Align the memory for file i/o if we might have O_DIRECT set */
 	byte* page = static_cast<byte*>(ut_align(buf2, psize));
 	IORequest request(IORequest::READ);
-	if (!os_file_read(request, handle, page, 0, psize)) {
+	if (os_file_read(request, handle, page, 0, psize) != DB_SUCCESS) {
 		ib::error() << "Unable to read first page of file " << name;
 		ut_free(buf2);
 		return false;
@@ -7729,13 +7767,8 @@ invalid:
 		return false;
 	}
 
-	ut_ad(space->free_limit == 0 || space->free_limit == free_limit);
-	ut_ad(space->free_len == 0 || space->free_len == free_len);
-	space->size_in_header = size;
-	space->free_limit = free_limit;
-	space->free_len = free_len;
-
 	if (first) {
+		ut_ad(space->id != TRX_SYS_SPACE);
 #ifdef UNIV_LINUX
 		find_metadata(handle, &statbuf);
 #else
@@ -7756,8 +7789,19 @@ invalid:
 
 		this->size = ulint(size_bytes / psize);
 		space->size += this->size;
+	} else if (space->id != TRX_SYS_SPACE || space->size_in_header) {
+		/* If this is not the first-time open, do nothing.
+		For the system tablespace, we always get invoked as
+		first=false, so we detect the true first-time-open based
+		on size_in_header and proceed to initiailze the data. */
+		return true;
 	}
 
+	ut_ad(space->free_limit == 0 || space->free_limit == free_limit);
+	ut_ad(space->free_len == 0 || space->free_len == free_len);
+	space->size_in_header = size;
+	space->free_limit = free_limit;
+	space->free_len = free_len;
 	return true;
 }
 
