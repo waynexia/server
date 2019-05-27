@@ -16,7 +16,7 @@
 
   You should have received a copy of the GNU Lesser General Public
   License along with this library; if not, write to the Free Software
-  Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+  Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1335  USA
 */
 
 #ifndef HA_MROONGA_HPP_
@@ -641,7 +641,6 @@ protected:
   bool commit_inplace_alter_table(TABLE *altered_table,
                                   Alter_inplace_info *ha_alter_info,
                                   bool commit);
-  void notify_table_changed();
 #endif
 
 private:
@@ -1201,8 +1200,6 @@ private:
   bool storage_commit_inplace_alter_table(TABLE *altered_table,
                                           Alter_inplace_info *ha_alter_info,
                                           bool commit);
-  void wrapper_notify_table_changed();
-  void storage_notify_table_changed();
 #else
   alter_table_operations wrapper_alter_table_flags(alter_table_operations flags);
   alter_table_operations storage_alter_table_flags(alter_table_operations flags);

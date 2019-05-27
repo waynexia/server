@@ -28,7 +28,7 @@ FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
 
 You should have received a copy of the GNU General Public License along with
 this program; if not, write to the Free Software Foundation, Inc.,
-51 Franklin Street, Suite 500, Boston, MA 02110-1335 USA
+51 Franklin Street, Fifth Floor, Boston, MA 02110-1335 USA
 
 *****************************************************************************/
 
@@ -117,9 +117,6 @@ segment). It is quite possible that some of the tablespaces doesn't host
 any of the rollback-segment based on configuration used. */
 ulint	srv_undo_tablespaces_active;
 
-/* The number of rollback segments to use */
-ulong	srv_undo_logs;
-
 /** Rate at which UNDO records should be purged. */
 ulong	srv_purge_rseg_truncate_frequency;
 
@@ -148,9 +145,6 @@ my_bool	srv_file_per_table;
 is greater than SRV_FORCE_NO_TRX_UNDO. */
 my_bool	high_level_read_only;
 
-/** Place locks to records only i.e. do not use next-key locking except
-on duplicate key checking and foreign key checking */
-ibool	srv_locks_unsafe_for_binlog;
 /** Sort buffer size in index creation */
 ulong	srv_sort_buf_size;
 /** Maximum modification log file size for online index creation */
@@ -1571,7 +1565,6 @@ srv_export_innodb_status(void)
 	export_vars.innodb_truncated_status_writes =
 		srv_truncated_status_writes;
 
-	export_vars.innodb_available_undo_logs = srv_available_undo_logs;
 	export_vars.innodb_page_compression_saved = srv_stats.page_compression_saved;
 	export_vars.innodb_index_pages_written = srv_stats.index_pages_written;
 	export_vars.innodb_non_index_pages_written = srv_stats.non_index_pages_written;
@@ -1996,16 +1989,12 @@ srv_master_evict_from_table_cache(
 {
 	ulint	n_tables_evicted = 0;
 
-	rw_lock_x_lock(dict_operation_lock);
-
-	dict_mutex_enter_for_mysql();
+	dict_sys_lock();
 
 	n_tables_evicted = dict_make_room_in_cache(
 		innobase_get_table_cache_size(), pct_check);
 
-	dict_mutex_exit_for_mysql();
-
-	rw_lock_x_unlock(dict_operation_lock);
+	dict_sys_unlock();
 
 	return(n_tables_evicted);
 }

@@ -11,7 +11,7 @@
 
    You should have received a copy of the GNU General Public License
    along with this program; if not, write to the Free Software
-   Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02111-1301 USA */
+   Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1335 USA */
 
 /* Test av locking */
 
@@ -171,8 +171,8 @@ void start_test(int id)
   MARIA_INFO isam_info;
   MARIA_HA *file,*file1,*file2=0,*lock;
 
-  if (!(file1=maria_open(filename,O_RDWR,HA_OPEN_WAIT_IF_LOCKED)) ||
-      !(file2=maria_open(filename,O_RDWR,HA_OPEN_WAIT_IF_LOCKED)))
+  if (!(file1=maria_open(filename,O_RDWR,HA_OPEN_WAIT_IF_LOCKED,0)) ||
+      !(file2=maria_open(filename,O_RDWR,HA_OPEN_WAIT_IF_LOCKED,0)))
   {
     fprintf(stderr,"Can't open isam-file: %s\n",filename);
     exit(1);

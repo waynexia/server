@@ -13,7 +13,7 @@ FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
 
 You should have received a copy of the GNU General Public License along with
 this program; if not, write to the Free Software Foundation, Inc.,
-51 Franklin Street, Suite 500, Boston, MA 02110-1335 USA
+51 Franklin Street, Fifth Floor, Boston, MA 02110-1335 USA
 
 *****************************************************************************/
 
@@ -271,8 +271,8 @@ row_update_for_mysql(
 	row_prebuilt_t*		prebuilt)
 	MY_ATTRIBUTE((warn_unused_result));
 
-/** This can only be used when srv_locks_unsafe_for_binlog is TRUE or this
-session is using a READ COMMITTED or READ UNCOMMITTED isolation level.
+/** This can only be used when the current transaction is at
+READ COMMITTED or READ UNCOMMITTED isolation level.
 Before calling this function row_search_for_mysql() must have
 initialized prebuilt->new_rec_locks to store the information which new
 record locks really were set. This function removes a newly set
@@ -418,7 +418,7 @@ will remain locked.
 @param[in]	create_failed	true=create table failed
 				because e.g. foreign key column
 @param[in]	nonatomic	Whether it is permitted to release
-				and reacquire dict_operation_lock
+				and reacquire dict_sys.latch
 @return error code */
 dberr_t
 row_drop_table_for_mysql(
@@ -694,8 +694,9 @@ struct row_prebuilt_t {
 	ulint		row_read_type;	/*!< ROW_READ_WITH_LOCKS if row locks
 					should be the obtained for records
 					under an UPDATE or DELETE cursor.
-					If innodb_locks_unsafe_for_binlog
-					is TRUE, this can be set to
+					At READ UNCOMMITTED or
+					READ COMMITTED isolation level,
+					this can be set to
 					ROW_READ_TRY_SEMI_CONSISTENT, so that
 					if the row under an UPDATE or DELETE
 					cursor was locked by another
@@ -717,8 +718,7 @@ struct row_prebuilt_t {
 					cases; note that this breaks
 					serializability. */
 	ulint		new_rec_locks;	/*!< normally 0; if
-					srv_locks_unsafe_for_binlog is
-					TRUE or session is using READ
+					the session is using READ
 					COMMITTED or READ UNCOMMITTED
 					isolation level, set in
 					row_search_for_mysql() if we set a new

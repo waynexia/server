@@ -13,7 +13,7 @@ FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
 
 You should have received a copy of the GNU General Public License along with
 this program; if not, write to the Free Software Foundation, Inc.,
-51 Franklin Street, Suite 500, Boston, MA 02110-1335 USA
+51 Franklin Street, Fifth Floor, Boston, MA 02110-1335 USA
 
 *****************************************************************************/
 
@@ -557,7 +557,7 @@ void lock_sys_t::close()
 	if (!m_initialised) return;
 
 	if (lock_latest_err_file != NULL) {
-		fclose(lock_latest_err_file);
+		my_fclose(lock_latest_err_file, MYF(MY_WME));
 		lock_latest_err_file = NULL;
 	}
 
@@ -2436,8 +2436,8 @@ lock_rec_inherit_to_gap(
 
 	ut_ad(lock_mutex_own());
 
-	/* If srv_locks_unsafe_for_binlog is TRUE or session is using
-	READ COMMITTED isolation level, we do not want locks set
+	/* At READ UNCOMMITTED or READ COMMITTED isolation level,
+	we do not want locks set
 	by an UPDATE or a DELETE to be inherited as gap type locks. But we
 	DO want S-locks/X-locks(taken for replace) set by a consistency
 	constraint to be inherited also then. */
@@ -2447,11 +2447,9 @@ lock_rec_inherit_to_gap(
 	     lock = lock_rec_get_next(heap_no, lock)) {
 
 		if (!lock_rec_get_insert_intention(lock)
-		    && !((srv_locks_unsafe_for_binlog
-			  || lock->trx->isolation_level
-			  <= TRX_ISO_READ_COMMITTED)
-			 && lock_get_mode(lock) ==
-			 (lock->trx->duplicates ? LOCK_S : LOCK_X))) {
+		    && (lock->trx->isolation_level > TRX_ISO_READ_COMMITTED
+			|| lock_get_mode(lock) !=
+			(lock->trx->duplicates ? LOCK_S : LOCK_X))) {
 			lock_rec_add_to_queue(
 				LOCK_REC | LOCK_GAP
 				| ulint(lock_get_mode(lock)),

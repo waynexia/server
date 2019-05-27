@@ -3,7 +3,7 @@
 Copyright (c) 1995, 2017, Oracle and/or its affiliates. All rights reserved.
 Copyright (c) 2008, 2009, Google Inc.
 Copyright (c) 2009, Percona Inc.
-Copyright (c) 2013, 2018, MariaDB Corporation.
+Copyright (c) 2013, 2019, MariaDB Corporation.
 
 Portions of this file contain modifications contributed and copyrighted by
 Google, Inc. Those modifications are gratefully acknowledged and are described
@@ -28,7 +28,7 @@ FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
 
 You should have received a copy of the GNU General Public License along with
 this program; if not, write to the Free Software Foundation, Inc.,
-51 Franklin Street, Suite 500, Boston, MA 02110-1335 USA
+51 Franklin Street, Fifth Floor, Boston, MA 02110-1335 USA
 
 *****************************************************************************/
 
@@ -254,10 +254,6 @@ extern	ulong	srv_thread_sleep_delay;
 /** Maximum sleep delay (in micro-seconds), value of 0 disables it.*/
 extern	ulong	srv_adaptive_max_sleep_delay;
 
-/** Place locks to records only i.e. do not use next-key locking except
-on duplicate key checking and foreign key checking */
-extern ibool	srv_locks_unsafe_for_binlog;
-
 /** Sort buffer size in index creation */
 extern ulong	srv_sort_buf_size;
 /** Maximum modification log file size for online index creation */
@@ -308,9 +304,6 @@ srv_is_undo_tablespace(ulint space_id)
 		&& space_id < (srv_undo_space_id_start
 			       + srv_undo_tablespaces_open);
 }
-
-/** The number of undo segments to use */
-extern ulong	srv_undo_logs;
 
 /** Maximum size of undo tablespace. */
 extern unsigned long long	srv_max_undo_log_size;
@@ -970,8 +963,6 @@ struct export_var_t{
 	ulint innodb_system_rows_deleted; /*!< srv_n_system_rows_deleted*/
 	ulint innodb_num_open_files;		/*!< fil_system_t::n_open */
 	ulint innodb_truncated_status_writes;	/*!< srv_truncated_status_writes */
-	ulint innodb_available_undo_logs;       /*!< srv_available_undo_logs
-						*/
 	/** Number of undo tablespace truncation operations */
 	ulong innodb_undo_truncations;
 	ulint innodb_defragment_compression_failures; /*!< Number of

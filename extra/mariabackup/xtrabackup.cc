@@ -18,7 +18,7 @@ GNU General Public License for more details.
 
 You should have received a copy of the GNU General Public License
 along with this program; if not, write to the Free Software
-Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1335  USA
 
 *******************************************************
 
@@ -36,8 +36,8 @@ ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
 FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
 
 You should have received a copy of the GNU General Public License along with
-this program; if not, write to the Free Software Foundation, Inc.,
-51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+this program; if not, write to the Free Software Foundation, Inc., 51 Franklin
+Street, Fifth Floor, Boston, MA 02110-1335 USA
 
 *******************************************************/
 
@@ -241,7 +241,6 @@ char*	innobase_data_file_path;
 
 my_bool innobase_use_doublewrite;
 my_bool	innobase_file_per_table;
-my_bool innobase_locks_unsafe_for_binlog;
 my_bool innobase_rollback_on_timeout;
 my_bool innobase_create_status_file;
 
@@ -1367,11 +1366,6 @@ struct my_option xb_server_options[] =
   &xb_plugin_dir, &xb_plugin_dir,
   0, GET_STR, REQUIRED_ARG, 0, 0, 0, 0, 0, 0 },
 
-  {"innodb-log-checksums", OPT_INNODB_LOG_CHECKSUMS,
-   "Whether to require checksums for InnoDB redo log blocks",
-   &innodb_log_checksums, &innodb_log_checksums,
-   0, GET_BOOL, REQUIRED_ARG, 1, 0, 0, 0, 0, 0 },
-
   {"open_files_limit", OPT_OPEN_FILES_LIMIT, "the maximum number of file "
    "descriptors to reserve with setrlimit().",
    (G_PTR*) &xb_open_files_limit, (G_PTR*) &xb_open_files_limit, 0, GET_ULONG,
@@ -1918,8 +1912,6 @@ static bool innodb_init_param()
 
 	srv_file_per_table = (my_bool) innobase_file_per_table;
 
-        srv_locks_unsafe_for_binlog = (ibool) innobase_locks_unsafe_for_binlog;
-
 	srv_max_n_open_files = ULINT_UNDEFINED - 5;
 	srv_innodb_status = (ibool) innobase_create_status_file;
 
@@ -1958,10 +1950,6 @@ static bool innodb_init_param()
 	if (!srv_undo_dir || !xtrabackup_backup) {
 		srv_undo_dir = (char*) ".";
 	}
-
-	log_checksum_algorithm_ptr = innodb_log_checksums || srv_encrypt_log
-		? log_block_calc_checksum_crc32
-		: log_block_calc_checksum_none;
 
 #ifdef _WIN32
 	srv_use_native_aio = TRUE;
@@ -2667,7 +2655,7 @@ static lsn_t xtrabackup_copy_log(lsn_t start_lsn, lsn_t end_lsn, bool last)
 				log_block,
 				scanned_lsn + data_len);
 
-		recv_sys->scanned_lsn = scanned_lsn + data_len;
+		recv_sys.scanned_lsn = scanned_lsn + data_len;
 
 		if (data_len == OS_FILE_LOG_BLOCK_SIZE) {
 			/* We got a full log block. */
@@ -2719,13 +2707,13 @@ static lsn_t xtrabackup_copy_log(lsn_t start_lsn, lsn_t end_lsn, bool last)
 static bool xtrabackup_copy_logfile(bool last = false)
 {
 	ut_a(dst_log_file != NULL);
-	ut_ad(recv_sys != NULL);
+	ut_ad(recv_sys.is_initialised());
 
 	lsn_t	start_lsn;
 	lsn_t	end_lsn;
 
-	recv_sys->parse_start_lsn = log_copy_scanned_lsn;
-	recv_sys->scanned_lsn = log_copy_scanned_lsn;
+	recv_sys.parse_start_lsn = log_copy_scanned_lsn;
+	recv_sys.scanned_lsn = log_copy_scanned_lsn;
 
 	start_lsn = ut_uint64_align_down(log_copy_scanned_lsn,
 					 OS_FILE_LOG_BLOCK_SIZE);
@@ -2748,15 +2736,15 @@ static bool xtrabackup_copy_logfile(bool last = false)
 		if (lsn == start_lsn) {
 			start_lsn = 0;
 		} else {
-			mutex_enter(&recv_sys->mutex);
+			mutex_enter(&recv_sys.mutex);
 			start_lsn = xtrabackup_copy_log(start_lsn, lsn, last);
-			mutex_exit(&recv_sys->mutex);
+			mutex_exit(&recv_sys.mutex);
 		}
 
 		log_mutex_exit();
 
 		if (!start_lsn) {
-			msg(recv_sys->found_corrupt_log
+			msg(recv_sys.found_corrupt_log
 			    ? "xtrabackup_copy_logfile() failed: corrupt log."
 			    : "xtrabackup_copy_logfile() failed.");
 			return true;
@@ -4071,7 +4059,7 @@ fail:
 
 	ut_crc32_init();
 	crc_init();
-	recv_sys_init();
+	recv_sys.create();
 
 #ifdef WITH_INNODB_DISALLOW_WRITES
 	srv_allow_writes_event = os_event_create(0);
@@ -4231,7 +4219,7 @@ fail_before_log_copying_thread_start:
 
 	/* copy log file by current position */
 	log_copy_scanned_lsn = checkpoint_lsn_start;
-	recv_sys->recovered_lsn = log_copy_scanned_lsn;
+	recv_sys.recovered_lsn = log_copy_scanned_lsn;
 	log_optimized_ddl_op = backup_optimized_ddl_op;
 
 	if (xtrabackup_copy_logfile())
@@ -5453,7 +5441,6 @@ static bool xtrabackup_prepare_func(char** argv)
 	}
 
 	srv_max_n_threads = 1000;
-	srv_undo_logs = 1;
 	srv_n_purge_threads = 1;
 
 	xb_filters_init();
@@ -5471,7 +5458,7 @@ static bool xtrabackup_prepare_func(char** argv)
 		sync_check_init();
 		ut_d(sync_check_enable());
 		ut_crc32_init();
-		recv_sys_init();
+		recv_sys.create();
 		log_sys.create();
 		recv_recovery_on = true;
 

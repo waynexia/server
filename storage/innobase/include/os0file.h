@@ -22,7 +22,7 @@ Public License for more details.
 
 You should have received a copy of the GNU General Public License along with
 this program; if not, write to the Free Software Foundation, Inc.,
-51 Franklin Street, Suite 500, Boston, MA 02110-1335 USA
+51 Franklin Street, Fifth Floor, Boston, MA 02110-1335 USA
 
 ***********************************************************************/
 
@@ -1523,15 +1523,6 @@ os_file_get_status(
 	os_file_stat_t* stat_info,
 	bool		check_rw_perm,
 	bool		read_only);
-
-/** Creates a temporary file in the location specified by the parameter
-path. If the path is NULL then it will be created on --tmpdir location.
-This function is defined in ha_innodb.cc.
-@param[in]	path	location for creating temporary file
-@return temporary file descriptor, or < 0 on error */
-os_file_t
-innobase_mysql_tmpfile(
-	const char*	path);
 
 /** Set the file create umask
 @param[in]	umask		The umask to use for file creation. */

@@ -11,7 +11,7 @@
 
    You should have received a copy of the GNU General Public License
    along with this program; if not, write to the Free Software
-   Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02111-1301 USA */
+   Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1335 USA */
 
 /*
   Storage of records in block
@@ -455,11 +455,14 @@ my_bool _ma_once_end_block_record(MARIA_SHARE *share)
       File must be synced as it is going out of the maria_open_list and so
       becoming unknown to Checkpoint.
     */
-    if (share->now_transactional &&
-        mysql_file_sync(share->bitmap.file.file, MYF(MY_WME)))
-      res= 1;
-    if (mysql_file_close(share->bitmap.file.file, MYF(MY_WME)))
-      res= 1;
+    if (!share->s3_path)
+    {
+      if (share->now_transactional &&
+          mysql_file_sync(share->bitmap.file.file, MYF(MY_WME)))
+        res= 1;
+      if (mysql_file_close(share->bitmap.file.file, MYF(MY_WME)))
+        res= 1;
+    }
     /*
       Trivial assignment to guard against multiple invocations
       (May happen if file are closed but we want to keep the maria object

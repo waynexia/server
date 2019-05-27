@@ -13,7 +13,7 @@ FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
 
 You should have received a copy of the GNU General Public License along with
 this program; if not, write to the Free Software Foundation, Inc.,
-51 Franklin Street, Suite 500, Boston, MA 02110-1335 USA
+51 Franklin Street, Fifth Floor, Boston, MA 02110-1335 USA
 
 *****************************************************************************/
 
@@ -43,6 +43,10 @@ Created 3/26/1996 Heikki Tuuri
 #include "trx0sys.h"
 #include "trx0trx.h"
 #include "trx0undo.h"
+
+#ifdef UNIV_PFS_THREAD
+mysql_pfs_key_t	trx_rollback_clean_thread_key;
+#endif
 
 /** true if trx_rollback_all_recovered() thread is active */
 bool			trx_rollback_is_active;
@@ -727,9 +731,9 @@ static my_bool trx_roll_count_callback(rw_trx_hash_element_t *element,
 void trx_roll_report_progress()
 {
 	ib_time_t time = ut_time();
-	mutex_enter(&recv_sys->mutex);
-	bool report = recv_sys->report(time);
-	mutex_exit(&recv_sys->mutex);
+	mutex_enter(&recv_sys.mutex);
+	bool report = recv_sys.report(time);
+	mutex_exit(&recv_sys.mutex);
 
 	if (report) {
 		trx_roll_count_callback_arg arg;
@@ -806,12 +810,10 @@ void trx_rollback_recovered(bool all)
     trx_t *trx= trx_list.back();
     trx_list.pop_back();
 
-#ifdef UNIV_DEBUG
     ut_ad(trx);
-    trx_mutex_enter(trx);
+    ut_d(trx_mutex_enter(trx));
     ut_ad(trx->is_recovered && trx_state_eq(trx, TRX_STATE_ACTIVE));
-    trx_mutex_exit(trx);
-#endif
+    ut_d(trx_mutex_exit(trx));
 
     if (!srv_is_being_started && !srv_undo_sources && srv_fast_shutdown)
       goto discard;
@@ -834,7 +836,6 @@ discard:
     }
   }
 }
-
 
 /*******************************************************************//**
 Rollback or clean up any incomplete transactions which were

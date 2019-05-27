@@ -13,7 +13,7 @@
 
    You should have received a copy of the GNU General Public License
    along with this program; if not, write to the Free Software
-   Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA */
+   Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1335  USA */
 
 /* This is the include file that should be included 'first' in every C file. */
 
@@ -989,7 +989,6 @@ typedef struct st_mysql_lex_string LEX_STRING;
 #if defined(__WIN__)
 #define socket_errno	WSAGetLastError()
 #define SOCKET_EINTR	WSAEINTR
-#define SOCKET_EAGAIN	WSAEINPROGRESS
 #define SOCKET_ETIMEDOUT WSAETIMEDOUT
 #define SOCKET_EWOULDBLOCK WSAEWOULDBLOCK
 #define SOCKET_EADDRINUSE WSAEADDRINUSE

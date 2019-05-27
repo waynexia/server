@@ -11,7 +11,7 @@
 
    You should have received a copy of the GNU General Public License
    along with this program; if not, write to the Free Software
-   Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA */
+   Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1335  USA */
 
 #include "mariadb.h"
 #include "sql_priv.h"
@@ -92,14 +92,12 @@ static bool init_fields(THD *thd, TABLE_LIST *tables,
   context->resolve_in_table_list_only(tables);
   for (; count-- ; find_fields++)
   {
-    LEX_CSTRING field_name= {find_fields->field_name,
-                             strlen(find_fields->field_name) };
     /* We have to use 'new' here as field will be re_linked on free */
     Item_field *field= (new (thd->mem_root)
                         Item_field(thd, context,
-                                   "mysql",
-                                   find_fields->table_name,
-                                   &field_name));
+                                   {STRING_WITH_LEN("mysql")},
+                                   Lex_cstring_strlen(find_fields->table_name),
+                                   Lex_cstring_strlen(find_fields->field_name)));
     if (!(find_fields->field= find_field_in_tables(thd, field, tables, NULL,
 						   0, REPORT_ALL_ERRORS, 1,
                                                    TRUE)))

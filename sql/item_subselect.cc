@@ -12,7 +12,7 @@
 
    You should have received a copy of the GNU General Public License
    along with this program; if not, write to the Free Software
-   Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301  USA */
+   Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1335  USA */
 
 /**
   @file
@@ -46,6 +46,8 @@
 double get_post_group_estimate(JOIN* join, double join_op_rows);
 
 LEX_CSTRING exists_outer_expr_name= { STRING_WITH_LEN("<exists outer expr>") };
+
+LEX_CSTRING no_matter_name= {STRING_WITH_LEN("<no matter>") };
 
 int check_and_do_in_subquery_rewrites(JOIN *join);
 
@@ -275,7 +277,7 @@ bool Item_subselect::fix_fields(THD *thd_param, Item **ref)
   {
     if (sl->tvc)
     {
-      wrap_tvc_in_derived_table(thd, sl);
+      wrap_tvc_into_select(thd, sl);
     }
   }
   
@@ -720,11 +722,14 @@ bool Item_subselect::exec()
   DBUG_ASSERT(fixed);
 
   DBUG_EXECUTE_IF("Item_subselect",
-                  push_warning_printf(thd, Sql_condition::WARN_LEVEL_NOTE,
-                  ER_UNKNOWN_ERROR, "DBUG: Item_subselect::exec %s",
-                  Item::Print(this,
-                              enum_query_type(QT_TO_SYSTEM_CHARSET |
-                                              QT_WITHOUT_INTRODUCERS)).ptr()););
+    Item::Print print(this,
+      enum_query_type(QT_TO_SYSTEM_CHARSET |
+        QT_WITHOUT_INTRODUCERS));
+
+    push_warning_printf(thd, Sql_condition::WARN_LEVEL_NOTE,
+       ER_UNKNOWN_ERROR, "DBUG: Item_subselect::exec %.*s",
+       print.length(),print.ptr());
+  );
   /*
     Do not execute subselect in case of a fatal error
     or if the query has been killed.
@@ -1927,8 +1932,8 @@ Item_in_subselect::single_value_transformer(JOIN *join)
     */
     expr= new (thd->mem_root) Item_direct_ref(thd, &select_lex->context,
                               (Item**)optimizer->get_cache(),
-                              "<no matter>",
-			      &in_left_expr_name);
+                              no_matter_name,
+			      in_left_expr_name);
   }
 
   DBUG_RETURN(false);
@@ -2159,8 +2164,8 @@ Item_in_subselect::create_single_in_to_exists_cond(JOIN *join,
                                                       this,
                                                       &select_lex->
                                                       ref_pointer_array[0],  
-                                                      (char *)"<ref>",
-                                                      &field_name));
+                                                      {STRING_WITH_LEN("<ref>")},
+                                                      field_name));
     if (!abort_on_null && left_expr->maybe_null)
     {
       /* 
@@ -2241,8 +2246,8 @@ Item_in_subselect::create_single_in_to_exists_cond(JOIN *join,
                                                   &select_lex->context,
                                                   this,
                                                   &select_lex->ref_pointer_array[0],
-                                                  (char *)"<no matter>",
-                                                  &field_name));
+                                                  no_matter_name,
+                                                  field_name));
         if (!abort_on_null && left_expr->maybe_null)
         {
           disable_cond_guard_for_const_null_left_expr(0);
@@ -2427,21 +2432,21 @@ Item_in_subselect::create_row_in_to_exists_cond(JOIN * join,
                      Item_direct_ref(thd, &select_lex->context,
                                      (*optimizer->get_cache())->
                                      addr(i),
-                                     (char *)"<no matter>",
-                                     &in_left_expr_name),
+                                     no_matter_name,
+                                     in_left_expr_name),
                      new (thd->mem_root)
                      Item_ref(thd, &select_lex->context,
                               &select_lex->ref_pointer_array[i],
-                              (char *)"<no matter>",
-                              &list_ref));
+                              no_matter_name,
+                              list_ref));
       Item *item_isnull=
         new (thd->mem_root)
         Item_func_isnull(thd,
                          new (thd->mem_root)
                          Item_ref(thd, &select_lex->context,
                                   &select_lex->ref_pointer_array[i],
-                                  (char *)"<no matter>",
-                                  &list_ref));
+                                  no_matter_name,
+                                  list_ref));
       Item *col_item= new (thd->mem_root)
         Item_cond_or(thd, item_eq, item_isnull);
       if (!abort_on_null && left_expr->element_index(i)->maybe_null &&
@@ -2461,8 +2466,8 @@ Item_in_subselect::create_row_in_to_exists_cond(JOIN * join,
                               Item_ref(thd, &select_lex->context,
                                        &select_lex->
                                        ref_pointer_array[i],
-                                       (char *)"<no matter>",
-                                       &list_ref));
+                                       no_matter_name,
+                                       list_ref));
       if (!abort_on_null && left_expr->element_index(i)->maybe_null &&
           get_cond_guard(i) )
       {
@@ -2496,14 +2501,14 @@ Item_in_subselect::create_row_in_to_exists_cond(JOIN * join,
                      Item_direct_ref(thd, &select_lex->context,
                                      (*optimizer->get_cache())->
                                      addr(i),
-                                     (char *)"<no matter>",
-                                     &in_left_expr_name),
+                                     no_matter_name,
+                                     in_left_expr_name),
                      new (thd->mem_root)
                      Item_direct_ref(thd, &select_lex->context,
                                      &select_lex->
                                      ref_pointer_array[i],
-                                     (char *)"<no matter>",
-                                     &list_ref));
+                                     no_matter_name,
+                                     list_ref));
       if (!abort_on_null && select_lex->ref_pointer_array[i]->maybe_null)
       {
         Item *having_col_item=
@@ -2512,8 +2517,8 @@ Item_in_subselect::create_row_in_to_exists_cond(JOIN * join,
                                 new (thd->mem_root)
                                 Item_ref(thd, &select_lex->context, 
                                          &select_lex->ref_pointer_array[i],
-                                         (char *)"<no matter>",
-                                         &list_ref));
+                                         no_matter_name,
+                                         list_ref));
         
         item_isnull= new (thd->mem_root)
           Item_func_isnull(thd,
@@ -2521,8 +2526,8 @@ Item_in_subselect::create_row_in_to_exists_cond(JOIN * join,
                            Item_direct_ref(thd, &select_lex->context,
                                            &select_lex->
                                            ref_pointer_array[i],
-                                           (char *)"<no matter>",
-                                           &list_ref));
+                                           no_matter_name,
+                                           list_ref));
         item= new (thd->mem_root) Item_cond_or(thd, item, item_isnull);
         if (left_expr->element_index(i)->maybe_null && get_cond_guard(i))
         {
@@ -2906,7 +2911,6 @@ bool Item_exists_subselect::exists2in_processor(void *opt_arg)
                                 !upper_not->is_top_level_item())) ||
       first_select->is_part_of_union() ||
       first_select->group_list.elements ||
-      first_select->order_list.elements ||
       join->having ||
       first_select->with_sum_func ||
       !first_select->leaf_tables.elements||
@@ -2914,8 +2918,31 @@ bool Item_exists_subselect::exists2in_processor(void *opt_arg)
       with_recursive_reference)
     DBUG_RETURN(FALSE);
 
-  DBUG_ASSERT(first_select->order_list.elements == 0 &&
-              first_select->group_list.elements == 0 &&
+  /*
+    EXISTS-to-IN coversion and ORDER BY ... LIMIT clause:
+
+    - "[ORDER BY ...] LIMIT n" clause with a non-zero n does not affect
+      the result of the EXISTS(...) predicate, and so we can discard
+      it during the conversion.
+    - "[ORDER BY ...] LIMIT m, n" can turn a non-empty resultset into empty
+      one, so it affects tthe EXISTS(...) result and cannot be discarded.
+
+    Disallow exists-to-in conversion if
+    (1). three is a LIMIT which is not a basic constant
+    (1a)  or is a "LIMIT 0" (see MDEV-19429)
+    (2).  there is an OFFSET clause
+  */
+  if ((first_select->select_limit &&                        // (1)
+       (!first_select->select_limit->basic_const_item() ||  // (1)
+        first_select->select_limit->val_uint() == 0)) ||    // (1a)
+      first_select->offset_limit)                           // (2)
+  {
+    DBUG_RETURN(FALSE);
+  }
+
+  /* Disallow the conversion if offset + limit exists */
+
+  DBUG_ASSERT(first_select->group_list.elements == 0 &&
               first_select->having == NULL);
 
   if (find_inner_outer_equalities(&join->conds, eqs))
@@ -2946,9 +2973,6 @@ bool Item_exists_subselect::exists2in_processor(void *opt_arg)
   if ((uint)eqs.elements() > (first_select->item_list.elements +
                               first_select->select_n_reserved))
     goto out;
-  /* It is simple query */
-  DBUG_ASSERT(first_select->join->all_fields.elements ==
-              first_select->item_list.elements);
 
   arena= thd->activate_stmt_arena_if_needed(&backup);
 
@@ -3053,8 +3077,8 @@ bool Item_exists_subselect::exists2in_processor(void *opt_arg)
     in_subs->expr= new (thd->mem_root)
       Item_direct_ref(thd, &first_select->context,
                       (Item**)optimizer->get_cache(),
-                      (char *)"<no matter>",
-                      &in_left_expr_name);
+                      no_matter_name,
+                      in_left_expr_name);
     if (in_subs->fix_fields(thd, optimizer->arguments() + 1))
     {
       res= TRUE;
@@ -3124,8 +3148,8 @@ bool Item_exists_subselect::exists2in_processor(void *opt_arg)
                                               Item_direct_ref(thd,
                                                               &unit->outer_select()->context,
                                                               optimizer->arguments(),
-                                                              (char *)"<no matter>",
-                                                              &exists_outer_expr_name)),
+                                                              no_matter_name,
+                                                              exists_outer_expr_name)),
                           optimizer) :
             (Item *)optimizer);
     }
@@ -3148,8 +3172,8 @@ bool Item_exists_subselect::exists2in_processor(void *opt_arg)
                                            Item_direct_ref(thd,
                                                            &unit->outer_select()->context,
                                                            optimizer->arguments()[0]->addr((int)i),
-                                                           (char *)"<no matter>",
-                                                           &exists_outer_expr_name)),
+                                                           no_matter_name,
+                                                           exists_outer_expr_name)),
                        thd->mem_root);
         }
       }
@@ -3204,21 +3228,6 @@ Item_in_subselect::select_in_like_transformer(JOIN *join)
 
   DBUG_ENTER("Item_in_subselect::select_in_like_transformer");
   DBUG_ASSERT(thd == join->thd);
-
-  /*
-    IN/SOME/ALL/ANY subqueries aren't support LIMIT clause. Without it
-    ORDER BY clause becomes meaningless thus we drop it here.
-  */
-  for (SELECT_LEX *sl= current->master_unit()->first_select();
-       sl; sl= sl->next_select())
-  {
-    if (sl->join)
-    {
-      sl->join->order= 0;
-      sl->join->skip_sort_order= 1;
-    }
-  }
-
   thd->where= "IN/ALL/ANY subquery";
 
   /*

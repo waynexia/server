@@ -28,7 +28,7 @@ FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
 
 You should have received a copy of the GNU General Public License along with
 this program; if not, write to the Free Software Foundation, Inc.,
-51 Franklin Street, Suite 500, Boston, MA 02110-1335 USA
+51 Franklin Street, Fifth Floor, Boston, MA 02110-1335 USA
 
 *****************************************************************************/
 
@@ -1107,11 +1107,11 @@ srv_shutdown_all_bg_threads()
 			ut_ad(!srv_read_only_mode);
 
 			/* e. Exit the i/o threads */
-			if (recv_sys->flush_start != NULL) {
-				os_event_set(recv_sys->flush_start);
+			if (recv_sys.flush_start != NULL) {
+				os_event_set(recv_sys.flush_start);
 			}
-			if (recv_sys->flush_end != NULL) {
-				os_event_set(recv_sys->flush_end);
+			if (recv_sys.flush_end != NULL) {
+				os_event_set(recv_sys.flush_end);
 			}
 
 			os_event_set(buf_flush_event);
@@ -1307,7 +1307,6 @@ dberr_t srv_start(bool create_new_db)
 	      || srv_operation == SRV_OPERATION_RESTORE
 	      || srv_operation == SRV_OPERATION_RESTORE_EXPORT);
 
-
 	if (srv_force_recovery == SRV_FORCE_NO_LOG_REDO) {
 		srv_read_only_mode = true;
 	}
@@ -1423,7 +1422,9 @@ dberr_t srv_start(bool create_new_db)
 				fil_path_to_mysql_datadir,
 				os_proc_get_number());
 
-			srv_monitor_file = fopen(srv_monitor_file_name, "w+");
+			srv_monitor_file = my_fopen(srv_monitor_file_name,
+						    O_RDWR|O_TRUNC|O_CREAT,
+						    MYF(MY_WME));
 
 			if (!srv_monitor_file) {
 				ib::error() << "Unable to create "
@@ -1532,7 +1533,7 @@ dberr_t srv_start(bool create_new_db)
 #endif /* UNIV_DEBUG */
 
 	log_sys.create();
-	recv_sys_init();
+	recv_sys.create();
 	lock_sys.create(srv_lock_table_size);
 
 	/* Create i/o-handler threads: */
@@ -1560,7 +1561,7 @@ dberr_t srv_start(bool create_new_db)
 
 #ifdef UNIV_LINUX
 		/* Wait for the setpriority() call to finish. */
-		os_event_wait(recv_sys->flush_end);
+		os_event_wait(recv_sys.flush_end);
 #endif /* UNIV_LINUX */
 		srv_start_state_set(SRV_START_STATE_IO);
 	}
@@ -1574,7 +1575,7 @@ dberr_t srv_start(bool create_new_db)
 		if (err != DB_SUCCESS) {
 			return(srv_init_abort(DB_ERROR));
 		}
-		recv_sys_debug_free();
+		recv_sys.debug_free();
 	}
 
 	/* Open or create the data files. */
@@ -1867,7 +1868,7 @@ files_checked:
 
 		err = recv_recovery_from_checkpoint_start(flushed_lsn);
 
-		recv_sys->dblwr.pages.clear();
+		recv_sys.dblwr.pages.clear();
 
 		if (err != DB_SUCCESS) {
 			return(srv_init_abort(err));
@@ -1899,8 +1900,8 @@ files_checked:
 
 			recv_apply_hashed_log_recs(true);
 
-			if (recv_sys->found_corrupt_log
-			    || recv_sys->found_corrupt_fs) {
+			if (recv_sys.found_corrupt_log
+			    || recv_sys.found_corrupt_fs) {
 				return(srv_init_abort(DB_CORRUPTION));
 			}
 
@@ -2099,10 +2100,39 @@ files_checked:
 				return(srv_init_abort(err));
 			}
 		}
+	}
 
+	ut_ad(err == DB_SUCCESS);
+	ut_a(sum_of_new_sizes != ULINT_UNDEFINED);
+
+	/* Create the doublewrite buffer to a new tablespace */
+	if (!srv_read_only_mode && srv_force_recovery < SRV_FORCE_NO_TRX_UNDO
+	    && !buf_dblwr_create()) {
+		return(srv_init_abort(DB_ERROR));
+	}
+
+	/* Here the double write buffer has already been created and so
+	any new rollback segments will be allocated after the double
+	write buffer. The default segment should already exist.
+	We create the new segments only if it's a new database or
+	the database was shutdown cleanly. */
+
+	/* Note: When creating the extra rollback segments during an upgrade
+	we violate the latching order, even if the change buffer is empty.
+	We make an exception in sync0sync.cc and check srv_is_being_started
+	for that violation. It cannot create a deadlock because we are still
+	running in single threaded mode essentially. Only the IO threads
+	should be running at this stage. */
+
+	if (!trx_sys_create_rsegs()) {
+		return(srv_init_abort(DB_ERROR));
+	}
+
+	if (!create_new_db) {
 		/* Validate a few system page types that were left
-		uninitialized by older versions of MySQL. */
+		uninitialized before MySQL or MariaDB 5.5. */
 		if (!high_level_read_only) {
+			ut_ad(srv_force_recovery < SRV_FORCE_NO_IBUF_MERGE);
 			buf_block_t*	block;
 			mtr.start();
 			/* Bitmap page types will be reset in
@@ -2130,16 +2160,20 @@ files_checked:
 				0, RW_X_LATCH, &mtr);
 			fil_block_check_type(*block, FIL_PAGE_TYPE_SYS, &mtr);
 			mtr.commit();
+
+			/* Roll back any recovered data dictionary
+			transactions, so that the data dictionary
+			tables will be free of any locks.  The data
+			dictionary latch should guarantee that there
+			is at most one data dictionary transaction
+			active at a time. */
+			if (srv_force_recovery < SRV_FORCE_NO_TRX_UNDO) {
+				trx_rollback_recovered(false);
+			}
 		}
 
-		/* Roll back any recovered data dictionary transactions, so
-		that the data dictionary tables will be free of any locks.
-		The data dictionary latch should guarantee that there is at
-		most one data dictionary transaction active at a time. */
-		if (srv_force_recovery < SRV_FORCE_NO_TRX_UNDO) {
-			trx_rollback_recovered(false);
-		}
-
+		/* FIXME: Skip the following if srv_read_only_mode,
+		while avoiding "Allocated tablespace ID" warnings. */
 		if (srv_force_recovery < SRV_FORCE_NO_IBUF_MERGE) {
 			/* Open or Create SYS_TABLESPACES and SYS_DATAFILES
 			so that tablespace names and other metadata can be
@@ -2166,41 +2200,24 @@ files_checked:
 			dict_check_tablespaces_and_store_max_id();
 		}
 
-		if (err != DB_SUCCESS) {
-			return(srv_init_abort(err));
+		if (srv_force_recovery < SRV_FORCE_NO_TRX_UNDO
+		    && !srv_read_only_mode) {
+			/* Drop partially created indexes. */
+			row_merge_drop_temp_indexes();
+			/* Drop garbage tables. */
+			row_mysql_drop_garbage_tables();
+
+			/* Drop any auxiliary tables that were not
+			dropped when the parent table was
+			dropped. This can happen if the parent table
+			was dropped but the server crashed before the
+			auxiliary tables were dropped. */
+			fts_drop_orphaned_tables();
+
+			/* Rollback incomplete non-DDL transactions */
+			trx_rollback_is_active = true;
+			os_thread_create(trx_rollback_all_recovered, 0, 0);
 		}
-
-		recv_recovery_rollback_active();
-		srv_startup_is_before_trx_rollback_phase = FALSE;
-	}
-
-	ut_ad(err == DB_SUCCESS);
-	ut_a(sum_of_new_sizes != ULINT_UNDEFINED);
-
-	/* Create the doublewrite buffer to a new tablespace */
-	if (!srv_read_only_mode && srv_force_recovery < SRV_FORCE_NO_TRX_UNDO
-	    && !buf_dblwr_create()) {
-		return(srv_init_abort(DB_ERROR));
-	}
-
-	/* Here the double write buffer has already been created and so
-	any new rollback segments will be allocated after the double
-	write buffer. The default segment should already exist.
-	We create the new segments only if it's a new database or
-	the database was shutdown cleanly. */
-
-	/* Note: When creating the extra rollback segments during an upgrade
-	we violate the latching order, even if the change buffer is empty.
-	We make an exception in sync0sync.cc and check srv_is_being_started
-	for that violation. It cannot create a deadlock because we are still
-	running in single threaded mode essentially. Only the IO threads
-	should be running at this stage. */
-
-	ut_a(srv_undo_logs > 0);
-	ut_a(srv_undo_logs <= TRX_SYS_N_RSEGS);
-
-	if (!trx_sys_create_rsegs()) {
-		return(srv_init_abort(DB_ERROR));
 	}
 
 	srv_startup_is_before_trx_rollback_phase = false;
@@ -2400,36 +2417,6 @@ skip_monitors:
 	return(DB_SUCCESS);
 }
 
-#if 0
-/********************************************************************
-Sync all FTS cache before shutdown */
-static
-void
-srv_fts_close(void)
-/*===============*/
-{
-	dict_table_t*	table;
-
-	for (table = UT_LIST_GET_FIRST(dict_sys->table_LRU);
-	     table; table = UT_LIST_GET_NEXT(table_LRU, table)) {
-		fts_t*          fts = table->fts;
-
-		if (fts != NULL) {
-			fts_sync_table(table);
-		}
-	}
-
-	for (table = UT_LIST_GET_FIRST(dict_sys->table_non_LRU);
-	     table; table = UT_LIST_GET_NEXT(table_LRU, table)) {
-		fts_t*          fts = table->fts;
-
-		if (fts != NULL) {
-			fts_sync_table(table);
-		}
-	}
-}
-#endif
-
 /** Shut down background threads that can generate undo log. */
 void srv_shutdown_bg_undo_sources()
 {
@@ -2473,7 +2460,7 @@ void innodb_shutdown()
 	srv_shutdown_all_bg_threads();
 
 	if (srv_monitor_file) {
-		fclose(srv_monitor_file);
+		my_fclose(srv_monitor_file, MYF(MY_WME));
 		srv_monitor_file = 0;
 		if (srv_monitor_file_name) {
 			unlink(srv_monitor_file_name);
@@ -2482,12 +2469,12 @@ void innodb_shutdown()
 	}
 
 	if (srv_misc_tmpfile) {
-		fclose(srv_misc_tmpfile);
+		my_fclose(srv_misc_tmpfile, MYF(MY_WME));
 		srv_misc_tmpfile = 0;
 	}
 
 	ut_ad(dict_stats_event || !srv_was_started || srv_read_only_mode);
-	ut_ad(dict_sys || !srv_was_started);
+	ut_ad(dict_sys.is_initialised() || !srv_was_started);
 	ut_ad(trx_sys.is_initialised() || !srv_was_started);
 	ut_ad(buf_dblwr || !srv_was_started || srv_read_only_mode
 	      || srv_force_recovery >= SRV_FORCE_NO_TRX_UNDO);
@@ -2516,7 +2503,7 @@ void innodb_shutdown()
 	and closing the data dictionary.  */
 
 #ifdef BTR_CUR_HASH_ADAPT
-	if (dict_sys) {
+	if (dict_sys.is_initialised()) {
 		btr_search_disable(true);
 	}
 #endif /* BTR_CUR_HASH_ADAPT */
@@ -2537,7 +2524,7 @@ void innodb_shutdown()
 		mutex_free(&srv_misc_tmpfile_mutex);
 	}
 
-	dict_close();
+	dict_sys.close();
 	btr_search_sys_free();
 
 	/* 3. Free all InnoDB's own mutexes and the os_fast_mutexes inside
@@ -2550,7 +2537,7 @@ void innodb_shutdown()
 	/* 4. Free all allocated memory */
 
 	pars_lexer_close();
-	recv_sys_close();
+	recv_sys.close();
 
 	ut_ad(buf_pool_ptr || !srv_was_started);
 	if (buf_pool_ptr) {

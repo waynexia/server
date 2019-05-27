@@ -13,7 +13,7 @@
 
    You should have received a copy of the GNU General Public License
    along with this program; if not, write to the Free Software
-   Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02111-1301 USA */
+   Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1335 USA */
 
 #ifdef USE_PRAGMA_INTERFACE
 #pragma interface                               /* gcc class implementation */
@@ -48,7 +48,7 @@ class ha_maria :public handler
   bool can_enable_indexes;
   /**
     If a transactional table is doing bulk insert with a single
-    UNDO_BULK_INSERT with/without repair. 
+    UNDO_BULK_INSERT with/without repair.
   */
   uint8 bulk_insert_single_undo;
   int repair(THD * thd, HA_CHECK *param, bool optimize);
@@ -68,7 +68,6 @@ public:
   uint max_supported_key_part_length() const
   { return max_supported_key_length(); }
   enum row_type get_row_type() const;
-  uint checksum() const;
   void change_table_ptr(TABLE *table_arg, TABLE_SHARE *share);
   virtual double scan_time();
 
@@ -152,15 +151,9 @@ public:
 
   }
   int optimize(THD * thd, HA_CHECK_OPT * check_opt);
-  int restore(THD * thd, HA_CHECK_OPT * check_opt);
-  int backup(THD * thd, HA_CHECK_OPT * check_opt);
   int assign_to_keycache(THD * thd, HA_CHECK_OPT * check_opt);
   int preload_keys(THD * thd, HA_CHECK_OPT * check_opt);
   bool check_if_incompatible_data(HA_CREATE_INFO * info, uint table_changes);
-#ifdef HAVE_REPLICATION
-  int dump(THD * thd, int fd);
-  int net_read_dump(NET * net);
-#endif
 #ifdef HAVE_QUERY_CACHE
   my_bool register_query_cache_table(THD *thd, const char *table_key,
                                      uint key_length,
@@ -180,22 +173,28 @@ public:
                             uint n_ranges, uint mode, HANDLER_BUFFER *buf);
   int multi_range_read_next(range_id_t *range_info);
   ha_rows multi_range_read_info_const(uint keyno, RANGE_SEQ_IF *seq,
-                                      void *seq_init_param, 
+                                      void *seq_init_param,
                                       uint n_ranges, uint *bufsz,
                                       uint *flags, Cost_estimate *cost);
   ha_rows multi_range_read_info(uint keyno, uint n_ranges, uint keys,
-                                uint key_parts, uint *bufsz, 
+                                uint key_parts, uint *bufsz,
                                 uint *flags, Cost_estimate *cost);
   int multi_range_read_explain_info(uint mrr_mode, char *str, size_t size);
-  
+
   /* Index condition pushdown implementation */
   Item *idx_cond_push(uint keyno, Item* idx_cond);
 
   int find_unique_row(uchar *record, uint unique_idx);
+
+  /* Following functions are needed by the S3 handler */
+  virtual S3_INFO *s3_open_args() { return 0; }
+  virtual void register_handler(MARIA_HA *file) {}
+
 private:
   DsMrr_impl ds_mrr;
   friend ICP_RESULT index_cond_func_maria(void *arg);
   friend void reset_thd_trn(THD *thd);
+  friend class ha_s3;
 };
 
 #endif /* HA_MARIA_INCLUDED */

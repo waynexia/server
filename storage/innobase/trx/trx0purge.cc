@@ -13,7 +13,7 @@ FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
 
 You should have received a copy of the GNU General Public License along with
 this program; if not, write to the Free Software Foundation, Inc.,
-51 Franklin Street, Suite 500, Boston, MA 02110-1335 USA
+51 Franklin Street, Fifth Floor, Boston, MA 02110-1335 USA
 
 *****************************************************************************/
 
@@ -192,10 +192,6 @@ void purge_sys_t::close()
   trx->state= TRX_STATE_NOT_STARTED;
   trx_free(trx);
   rw_lock_free(&latch);
-  /* rw_lock_free() already called latch.~rw_lock_t(); tame the
-  debug assertions when the destructor will be called once more. */
-  ut_ad(latch.magic_n == 0);
-  ut_d(latch.magic_n= RW_LOCK_MAGIC_N);
   mutex_free(&pq_mutex);
   os_event_destroy(event);
 }
@@ -572,7 +568,7 @@ static void trx_purge_truncate_history()
 		return;
 	}
 
-	while (srv_undo_log_truncate && srv_undo_logs >= 3) {
+	while (srv_undo_log_truncate) {
 		if (!purge_sys.truncate.current) {
 			const ulint threshold = ulint(srv_max_undo_log_size
 						      >> srv_page_size_shift);

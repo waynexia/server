@@ -13,7 +13,7 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program; if not, write to the Free Software
-# Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
+# Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1335  USA
 
 #
 # Suppress some common (not fatal) errors in system libraries found by valgrind
@@ -1798,4 +1798,38 @@
    obj:/usr/lib64/libcrypto.so*
    fun:FIPS_mode_set
    obj:/usr/lib64/libcrypto.so*
+}
+
+#
+# libmarias3 problems
+#
+{
+   libmarias3 crypto
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   fun:malloc
+   ...
+   obj:/usr/lib64/libcrypto.so*
+}
+
+#
+# libmarias3 problems
+#
+{
+   libmarias3 curl
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   fun:malloc
+   ...
+   obj:/usr/lib64/libcrypto.so*
+}
+
+{
+   libmarias3 libxml2
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   fun:calloc
+   fun:xmlGetGlobalState
+   ...
+   fun:s3_deinit_library
 }

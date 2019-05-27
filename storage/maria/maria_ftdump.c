@@ -11,7 +11,7 @@
 
    You should have received a copy of the GNU General Public License
    along with this program; if not, write to the Free Software
-   Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02111-1301 USA */
+   Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1335 USA */
 
 /* Written by Sergei A. Golubchik, who has a shared copyright to this code
    added support for long options (my_getopt) 22.5.2002 by Jani Tolonen */
@@ -88,7 +88,7 @@ int main(int argc,char *argv[])
                  MARIA_KEY_BLOCK_LENGTH, 0, MY_WME);
 
   if (!(info=maria_open(argv[0], O_RDONLY,
-                        HA_OPEN_ABORT_IF_LOCKED|HA_OPEN_FROM_SQL_LAYER)))
+                        HA_OPEN_ABORT_IF_LOCKED|HA_OPEN_FROM_SQL_LAYER, 0)))
   {
     error=my_errno;
     goto err;

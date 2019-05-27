@@ -12,7 +12,7 @@
 
    You should have received a copy of the GNU General Public License
    along with this program; if not, write to the Free Software
-   Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301  USA */
+   Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1335  USA */
 
 /*
   Note that we can't have assertion on file descriptors;  The reason for
@@ -329,8 +329,8 @@ void vio_delete(Vio* vio)
 */
 void vio_end(void)
 {
-#ifdef HAVE_YASSL
-  yaSSL_CleanUp();
+#ifdef HAVE_WOLFSSL
+  wolfSSL_Cleanup();
 #elif defined(HAVE_OPENSSL)
   // This one is needed on the client side
   ERR_remove_state(0);

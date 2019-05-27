@@ -17,7 +17,7 @@
 
   You should have received a copy of the GNU Lesser General Public
   License along with this library; if not, write to the Free Software
-  Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+  Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1335  USA
 */
 
 #include "mrn_mysql.h"
@@ -1377,11 +1377,10 @@ static void mrn_drop_database(handlerton *hton, char *path)
 static int mrn_close_connection(handlerton *hton, THD *thd)
 {
   MRN_DBUG_ENTER_FUNCTION();
-  void *p = *thd_ha_data(thd, mrn_hton_ptr);
+  void *p = thd_get_ha_data(thd, mrn_hton_ptr);
   if (p) {
     mrn_clear_slot_data(thd);
     free(p);
-    *thd_ha_data(thd, mrn_hton_ptr) = (void *) NULL;
     {
       mrn::Lock lock(&mrn_allocated_thds_mutex);
       my_hash_delete(&mrn_allocated_thds, (uchar*) thd);
@@ -2040,7 +2039,7 @@ static int mrn_deinit(void *p)
       mrn_clear_slot_data(tmp_thd);
       void *slot_ptr = mrn_get_slot_data(tmp_thd, false);
       if (slot_ptr) free(slot_ptr);
-      *thd_ha_data(tmp_thd, mrn_hton_ptr) = (void *) NULL;
+      thd_set_ha_data(tmp_thd, mrn_hton_ptr, 0);
       my_hash_delete(&mrn_allocated_thds, (uchar *) tmp_thd);
     }
   }
@@ -15514,34 +15513,6 @@ bool ha_mroonga::commit_inplace_alter_table(
                                                 commit);
   }
   DBUG_RETURN(result);
-}
-
-void ha_mroonga::wrapper_notify_table_changed()
-{
-  MRN_DBUG_ENTER_METHOD();
-  MRN_SET_WRAP_SHARE_KEY(share, table->s);
-  MRN_SET_WRAP_TABLE_KEY(this, table);
-  wrap_handler->ha_notify_table_changed();
-  MRN_SET_BASE_SHARE_KEY(share, table->s);
-  MRN_SET_BASE_TABLE_KEY(this, table);
-  DBUG_VOID_RETURN;
-}
-
-void ha_mroonga::storage_notify_table_changed()
-{
-  MRN_DBUG_ENTER_METHOD();
-  DBUG_VOID_RETURN;
-}
-
-void ha_mroonga::notify_table_changed()
-{
-  MRN_DBUG_ENTER_METHOD();
-  if (share->wrapper_mode) {
-    wrapper_notify_table_changed();
-  } else {
-    storage_notify_table_changed();
-  }
-  DBUG_VOID_RETURN;
 }
 #else
 alter_table_operations ha_mroonga::wrapper_alter_table_flags(alter_table_operations flags)

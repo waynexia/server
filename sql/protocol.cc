@@ -12,7 +12,7 @@
 
    You should have received a copy of the GNU General Public License
    along with this program; if not, write to the Free Software
-   Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301  USA */
+   Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1335  USA */
 
 /**
   @file
@@ -990,7 +990,7 @@ bool Protocol_text::store_field_metadata_for_list_fields(const THD *thd,
                                                          uint pos)
 {
   Send_field field= tl->view ?
-                    Send_field(fld, tl->view_db.str, tl->view_name.str) :
+                    Send_field(fld, tl->view_db, tl->view_name) :
                     Send_field(fld);
   return store_field_metadata(thd, field, fld->charset_for_protocol(), pos);
 }
@@ -1228,7 +1228,7 @@ bool Protocol_text::store(float from, uint32 decimals, String *buffer)
   DBUG_ASSERT(valid_handler(field_pos, PROTOCOL_SEND_FLOAT));
   field_pos++;
 #endif
-  buffer->set_real((double) from, decimals, thd->charset());
+  Float(from).to_string(buffer, decimals);
   return net_store_data((uchar*) buffer->ptr(), buffer->length());
 }
 

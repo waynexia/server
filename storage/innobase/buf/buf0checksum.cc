@@ -13,7 +13,7 @@ FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
 
 You should have received a copy of the GNU General Public License along with
 this program; if not, write to the Free Software Foundation, Inc.,
-51 Franklin Street, Suite 500, Boston, MA 02110-1335 USA
+51 Franklin Street, Fifth Floor, Boston, MA 02110-1335 USA
 
 *****************************************************************************/
 
@@ -33,11 +33,8 @@ Created Aug 11, 2011 Vasil Dimov
 #include "srv0srv.h"
 #endif /* !UNIV_INNOCHECKSUM */
 
-/** the macro MYSQL_SYSVAR_ENUM() requires "long unsigned int" and if we
-use srv_checksum_algorithm_t here then we get a compiler error:
-ha_innodb.cc:12251: error: cannot convert 'srv_checksum_algorithm_t*' to
-  'long unsigned int*' in initialization */
-ulong	srv_checksum_algorithm = SRV_CHECKSUM_ALGORITHM_INNODB;
+/** the value of innodb_checksum_algorithm */
+ulong	srv_checksum_algorithm;
 
 /** Calculate the CRC32 checksum of a page. The value is stored to the page
 when it is written to a file and also checked for a match when reading from

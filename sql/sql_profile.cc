@@ -12,7 +12,7 @@
 
    You should have received a copy of the GNU General Public License
    along with this program; if not, write to the Free Software
-   Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301  USA */
+   Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1335  USA */
 
 
 /**
@@ -119,15 +119,11 @@ int make_profile_table_for_show(THD *thd, ST_SCHEMA_TABLE *schema_table)
       continue;
 
     field_info= &schema_table->fields_info[i];
-    LEX_CSTRING field_name= {field_info->field_name,
-                             strlen(field_info->field_name) };
     Item_field *field= new (thd->mem_root) Item_field(thd, context,
-                                      NullS, NullS, &field_name);
+                                    Lex_cstring_strlen(field_info->field_name));
     if (field)
     {
-      field->set_name(thd, field_info->old_name,
-                      (uint) strlen(field_info->old_name),
-                      system_charset_info);
+      field->set_name(thd, field_info->get_old_name());
       if (add_item_to_list(thd, field))
         return 1;
     }

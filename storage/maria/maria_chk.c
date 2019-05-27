@@ -11,7 +11,7 @@
 
    You should have received a copy of the GNU General Public License
    along with this program; if not, write to the Free Software
-   Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02111-1301 USA */
+   Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1335 USA */
 
 /* Describe, check and repair of MARIA tables */
 
@@ -26,6 +26,9 @@
 #ifdef HAVE_SYS_MMAN_H
 #include <sys/mman.h>
 #endif
+/* Remove next line if you want aria_chk to produce a stack trace */
+#undef HAVE_BACKTRACE
+#include <my_stacktrace.h>
 
 static uint decode_bits;
 static char **default_argv;
@@ -120,15 +123,15 @@ static void my_exit(int exit_code)
          MY_CHECK_ERROR | MY_GIVE_INFO : MY_CHECK_ERROR);
   exit(exit_code);
 }
-  
 
-	/* Main program */
+/* Main program */
 
 int main(int argc, char **argv)
 {
   int error;
   MY_INIT(argv[0]);
 
+  my_init_stacktrace(1);
   default_log_dir= opt_log_dir= maria_data_root= (char *)".";
   maria_chk_init(&check_param);
   check_param.opt_lock_memory= 1;		/* Lock memory if possible */
@@ -490,7 +493,7 @@ static void usage(void)
   --ignore-control-file  Don't open the control file. Only use this if you\n\
                          are sure the tables are not in use by another\n\
                          program!\n\
-  --require-control-file  Abort if we can't find/read the maria_log_control\n\
+  --require-control-file  Abort if we can't find/read the aria_log_control\n\
                           file\n\
   -s, --silent	      Only print errors.  One can use two -s to make\n\
 		      maria_chk very silent.\n\
@@ -1025,7 +1028,8 @@ static int maria_chk(HA_CHECK *param, char *filename)
                         ((param->testflag & T_WAIT_FOREVER) ?
                          HA_OPEN_WAIT_IF_LOCKED :
                          (param->testflag & T_DESCRIPT) ?
-                         HA_OPEN_IGNORE_IF_LOCKED : HA_OPEN_ABORT_IF_LOCKED))))
+                         HA_OPEN_IGNORE_IF_LOCKED : HA_OPEN_ABORT_IF_LOCKED),
+                        0)))
   {
     /* Avoid twice printing of isam file name */
     param->error_printed=1;
@@ -2101,7 +2105,7 @@ static my_bool write_log_record(HA_CHECK *param)
     Now that all operations including O_NEW_DATA|INDEX are successfully
     done, we can write a log record.
   */
-  MARIA_HA *info= maria_open(param->isam_file_name, O_RDWR, 0);
+  MARIA_HA *info= maria_open(param->isam_file_name, O_RDWR, 0, 0);
   if (info == NULL)
     _ma_check_print_error(param, default_open_errmsg, my_errno,
                           param->isam_file_name);

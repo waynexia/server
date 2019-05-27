@@ -12,7 +12,7 @@
 
    You should have received a copy of the GNU General Public License
    along with this program; if not, write to the Free Software
-   Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301  USA */
+   Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1335  USA */
 
 
 /* A lexical scanner on a temporary buffer with a yacc interface */
@@ -2365,6 +2365,7 @@ void st_select_lex_unit::init_query()
   with_element= 0;
   columns_are_renamed= false;
   intersect_mark= NULL;
+  with_wrapped_tvc= false;
 }
 
 void st_select_lex::init_query()
@@ -3508,6 +3509,19 @@ void st_select_lex_unit::set_limit(st_select_lex *sl)
 bool st_select_lex_unit::union_needs_tmp_table()
 {
   if (with_element && with_element->is_recursive)
+    return true;
+  if (!with_wrapped_tvc)
+  {
+    for (st_select_lex *sl= first_select(); sl; sl=sl->next_select())
+    {
+      if (sl->tvc && sl->tvc->to_be_wrapped_as_with_tail())
+      {
+        with_wrapped_tvc= true;
+        break;
+      }
+    }
+  }
+  if (with_wrapped_tvc)
     return true;
   return union_distinct != NULL ||
     global_parameters()->order_list.elements != 0 ||
@@ -5383,8 +5397,7 @@ LEX::wrap_unit_into_derived(SELECT_LEX_UNIT *unit)
 
   /* add SELECT list*/
   {
-    Item *item= new (thd->mem_root)
-      Item_field(thd, context, NULL, NULL, &star_clex_str);
+    Item *item= new (thd->mem_root) Item_field(thd, context, star_clex_str);
     if (item == NULL)
       goto err;
     if (add_item_to_list(thd, item))
@@ -5446,8 +5459,7 @@ SELECT_LEX *LEX::wrap_select_chain_into_derived(SELECT_LEX *sel)
 
   /* add SELECT list*/
   {
-    Item *item= new (thd->mem_root)
-      Item_field(thd, context, NULL, NULL, &star_clex_str);
+    Item *item= new (thd->mem_root) Item_field(thd, context, star_clex_str);
     if (item == NULL)
       goto err;
     if (add_item_to_list(thd, item))
@@ -5991,7 +6003,7 @@ bool LEX::sp_for_loop_implicit_cursor_statement(THD *thd,
         SELECT rec.a, rec.b;
       END FOR;
   */
-  if (!(item= new (thd->mem_root) Item_field(thd, NULL, NullS, NullS, &name)))
+  if (!(item= new (thd->mem_root) Item_field(thd, NULL, name)))
     return true;
   bounds->m_index->set_item_and_free_list(item, NULL);
   if (thd->lex->sphead->restore_lex(thd))
@@ -6144,7 +6156,7 @@ bool LEX::sp_for_loop_cursor_declarations(THD *thd,
     name= item_splocal->m_name;
   else if ((item_field= item->type() == Item::FIELD_ITEM ?
                         static_cast<Item_field *>(item) : NULL) &&
-           item_field->table_name == NULL)
+           item_field->table_name.str == NULL)
     name= item_field->field_name;
   else if (item->type() == Item::FUNC_ITEM &&
            static_cast<Item_func*>(item)->functype() == Item_func::FUNC_SP &&
@@ -7000,7 +7012,7 @@ Item *LEX::create_and_link_Item_trigger_field(THD *thd,
                                 new_row ?
                                   Item_trigger_field::NEW_ROW:
                                   Item_trigger_field::OLD_ROW,
-                                name, SELECT_ACL, tmp_read_only);
+                                *name, SELECT_ACL, tmp_read_only);
   /*
     Let us add this item to list of all Item_trigger_field objects
     in trigger.
@@ -7149,7 +7161,7 @@ Item *LEX::create_item_for_loop_bound(THD *thd,
     Pass NULL as the name resolution context.
     This is OK, fix_fields() won't be called for this Item_field.
   */
-  return new (thd->mem_root) Item_field(thd, NULL, a->str, b->str, c);
+  return new (thd->mem_root) Item_field(thd, NULL, *a, *b, *c);
 }
 
 
@@ -7187,7 +7199,7 @@ Item *LEX::create_item_ident_nospvar(THD *thd,
   if (current_select->parsing_place == FOR_LOOP_BOUND)
     return create_item_for_loop_bound(thd, &null_clex_str, a, b);
 
-  return create_item_ident_field(thd, NullS, a->str, b);
+  return create_item_ident_field(thd, Lex_ident_sys(), *a, *b);
 }
 
 
@@ -7379,9 +7391,8 @@ Item *LEX::create_item_ident(THD *thd,
                              const Lex_ident_sys_st *b,
                              const Lex_ident_sys_st *c)
 {
-  const char *schema= (thd->client_capabilities & CLIENT_NO_SCHEMA ?
-                       NullS : a->str);
-
+  Lex_ident_sys_st schema= thd->client_capabilities & CLIENT_NO_SCHEMA ?
+                           Lex_ident_sys() : *a;
   if ((thd->variables.sql_mode & MODE_ORACLE) && c->length == 7)
   {
     if (!my_strnncoll(system_charset_info,
@@ -7403,7 +7414,7 @@ Item *LEX::create_item_ident(THD *thd,
   if (current_select->parsing_place == FOR_LOOP_BOUND)
     return create_item_for_loop_bound(thd, &null_clex_str, b, c);
 
-  return create_item_ident_field(thd, schema, b->str, c);
+  return create_item_ident_field(thd, schema, *b, *c);
 }
 
 
@@ -7489,11 +7500,12 @@ bool LEX::set_user_variable(THD *thd, const LEX_CSTRING *name, Item *val)
 }
 
 
-Item *LEX::create_item_ident_field(THD *thd, const char *db,
-                                   const char *table,
-                                   const Lex_ident_sys_st *name)
+Item *LEX::create_item_ident_field(THD *thd,
+                                   const Lex_ident_sys_st &db,
+                                   const Lex_ident_sys_st &table,
+                                   const Lex_ident_sys_st &name)
 {
-  if (check_expr_allows_fields_or_error(thd, name->str))
+  if (check_expr_allows_fields_or_error(thd, name.str))
     return NULL;
 
   if (current_select->parsing_place != IN_HAVING ||
@@ -8473,9 +8485,9 @@ bool SELECT_LEX::vers_push_field(THD *thd, TABLE_LIST *table,
 {
   DBUG_ASSERT(field_name.str);
   Item_field *fld= new (thd->mem_root) Item_field(thd, &context,
-                                                  table->db.str,
-                                                  table->alias.str,
-                                                  &field_name);
+                                                  table->db,
+                                                  table->alias,
+                                                  field_name);
   if (unlikely(!fld) || unlikely(item_list.push_back(fld)))
     return true;
 
@@ -8593,8 +8605,8 @@ Item *LEX::create_item_qualified_asterisk(THD *thd,
 {
   Item *item;
   if (!(item= new (thd->mem_root) Item_field(thd, current_context(),
-                                             NullS, name->str,
-                                             &star_clex_str)))
+                                             null_clex_str, *name,
+                                             star_clex_str)))
     return NULL;
   current_select->with_wild++;
   return item;
@@ -8606,11 +8618,10 @@ Item *LEX::create_item_qualified_asterisk(THD *thd,
                                           const Lex_ident_sys_st *b)
 {
   Item *item;
-  const char* schema= thd->client_capabilities & CLIENT_NO_SCHEMA ?
-                      NullS : a->str;
+  Lex_ident_sys_st schema= thd->client_capabilities & CLIENT_NO_SCHEMA ?
+                           Lex_ident_sys() : *a;
   if (!(item= new (thd->mem_root) Item_field(thd, current_context(),
-                                             schema, b->str,
-                                             &star_clex_str)))
+                                             schema, *b, star_clex_str)))
    return NULL;
   current_select->with_wild++;
   return item;
@@ -8798,36 +8809,6 @@ bool LEX::last_field_generated_always_as_row_end()
 }
 
 
-bool LEX::tvc_finalize()
-{
-  mysql_init_select(this);
-  if (unlikely(!(current_select->tvc=
-               new (thd->mem_root)
-               table_value_constr(many_values,
-                                  current_select,
-                                  current_select->options))))
-    return true;
-  many_values.empty();
-  return false;
-}
-
-
-bool LEX::tvc_finalize_derived()
-{
-  derived_tables|= DERIVED_SUBQUERY;
-  if (unlikely(!expr_allows_subselect))
-  {
-    thd->parse_error();
-    return true;
-  }
-  if (current_select->get_linkage() == GLOBAL_OPTIONS_TYPE ||
-      unlikely(mysql_new_select(this, 1, NULL)))
-    return true;
-  current_select->set_linkage(DERIVED_TABLE_TYPE);
-  return tvc_finalize();
-}
-
-
 void st_select_lex_unit::reset_distinct()
 {
   union_distinct= NULL;
@@ -8926,12 +8907,12 @@ void Lex_select_lock::set_to(SELECT_LEX *sel)
       if (update_lock)
       {
         sel->lock_type= TL_WRITE;
-        sel->set_lock_for_tables(TL_WRITE);
+        sel->set_lock_for_tables(TL_WRITE, false);
       }
       else
       {
         sel->lock_type= TL_READ_WITH_SHARED_LOCKS;
-        sel->set_lock_for_tables(TL_READ_WITH_SHARED_LOCKS);
+        sel->set_lock_for_tables(TL_READ_WITH_SHARED_LOCKS, false);
       }
     }
   }
@@ -9262,10 +9243,26 @@ SELECT_LEX_UNIT *LEX::parsed_select_expr_cont(SELECT_LEX_UNIT *unit,
 SELECT_LEX_UNIT *LEX::parsed_body_select(SELECT_LEX *sel,
                                          Lex_order_limit_lock * l)
 {
+  if (sel->braces && l && l->lock.defined_lock)
+  {
+    my_error(ER_WRONG_USAGE, MYF(0), "lock options",
+        "SELECT in brackets");
+    return NULL;
+  }
   if (!(sel= parsed_select(sel, l)))
     return NULL;
 
   SELECT_LEX_UNIT *res= create_unit(sel);
+  if (res && sel->tvc && sel->order_list.elements)
+  {
+    if (res->add_fake_select_lex(thd))
+      return NULL;
+    SELECT_LEX *fake= res->fake_select_lex;
+    fake->order_list= sel->order_list;
+    fake->explicit_limit= sel->explicit_limit;
+    fake->select_limit= sel->select_limit;
+    fake->offset_limit= sel->offset_limit;
+  }
   return res;
 }
 
@@ -9476,6 +9473,12 @@ bool LEX::select_finalize(st_select_lex_unit *expr)
 }
 
 
+bool LEX::select_finalize(st_select_lex_unit *expr, Lex_select_lock l)
+{
+  return expr->set_lock_to_the_last_select(l) ||
+         select_finalize(expr);
+}
+
 /*
   "IN" and "EXISTS" subselect can appear in two statement types:
 
@@ -9519,7 +9522,7 @@ bool SELECT_LEX_UNIT::set_lock_to_the_last_select(Lex_select_lock l)
     if (sel->braces)
     {
       my_error(ER_WRONG_USAGE, MYF(0), "lock options",
-               "End SELECT expression");
+               "SELECT in brackets");
       return TRUE;
     }
     l.set_to(sel);
@@ -10421,4 +10424,20 @@ bool LEX::stmt_create_stored_function_start(const DDL_options_st &options,
                                           &sp_handler_function, agg_type)))
     return true;
   return false;
+}
+
+
+Spvar_definition *LEX::row_field_name(THD *thd, const Lex_ident_sys_st &name)
+{
+  Spvar_definition *res;
+  if (unlikely(check_string_char_length(&name, 0, NAME_CHAR_LEN,
+                                        system_charset_info, 1)))
+  {
+    my_error(ER_TOO_LONG_IDENT, MYF(0), name.str);
+    return NULL;
+  }
+  if (unlikely(!(res= new (thd->mem_root) Spvar_definition())))
+    return NULL;
+  init_last_field(res, &name, thd->variables.collation_database);
+  return res;
 }

@@ -11,7 +11,7 @@
 
    You should have received a copy of the GNU General Public License
    along with this program; if not, write to the Free Software
-   Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02111-1301 USA */
+   Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1335 USA */
 
 #include "ma_fulltext.h"
 #include "trnman_public.h"
@@ -41,7 +41,7 @@ int maria_delete_table(const char *name)
     Unfortunately it is necessary to open the table just to check this. We use
     'open_for_repair' to be able to open even a crashed table.
   */
-  if (!(info= maria_open(name, O_RDONLY, HA_OPEN_FOR_REPAIR)))
+  if (!(info= maria_open(name, O_RDONLY, HA_OPEN_FOR_REPAIR, 0)))
   {
     sync_dir= 0;
   }

@@ -11,7 +11,7 @@
 
    You should have received a copy of the GNU General Public License
    along with this program; if not, write to the Free Software
-   Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02111-1301 USA */
+   Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1335 USA */
 
 /* Testing of the basic functions of a MARIA table */
 
@@ -209,7 +209,7 @@ static int run_test(const char *filename)
 		uniques, &uniquedef, &create_info,
 		create_flag))
     goto err;
-  if (!(file=maria_open(filename,2,HA_OPEN_ABORT_IF_LOCKED)))
+  if (!(file=maria_open(filename,2,HA_OPEN_ABORT_IF_LOCKED, 0)))
     goto err;
   if (!silent)
     printf("- Writing key:s\n");
@@ -343,7 +343,7 @@ static int run_test(const char *filename)
     goto err;
   if (maria_close(file))
     goto err;
-  if (!(file=maria_open(filename,2,HA_OPEN_ABORT_IF_LOCKED)))
+  if (!(file=maria_open(filename,2,HA_OPEN_ABORT_IF_LOCKED, 0)))
     goto err;
   if (maria_begin(file))
     goto err;

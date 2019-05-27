@@ -11,7 +11,7 @@
 
    You should have received a copy of the GNU General Public License
    along with this program; if not, write to the Free Software
-   Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02111-1301 USA */
+   Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1335 USA */
 
 /* Pack MARIA file */
 
@@ -404,7 +404,7 @@ static MARIA_HA *open_maria_file(char *name,int mode)
 
   if (!(isam_file=maria_open(name, mode, HA_OPEN_IGNORE_MOVED_STATE |
 			  (opt_wait ? HA_OPEN_WAIT_IF_LOCKED :
-			   HA_OPEN_ABORT_IF_LOCKED))))
+			   HA_OPEN_ABORT_IF_LOCKED), 0)))
   {
     fprintf(stderr, "%s gave error %d on open\n", name, my_errno);
     DBUG_RETURN(0);

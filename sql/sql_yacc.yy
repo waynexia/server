@@ -13,7 +13,7 @@
 
    You should have received a copy of the GNU General Public License
    along with this program; if not, write to the Free Software
-   Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301  USA */
+   Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1335  USA */
 
 /* sql_yacc.yy */
 
@@ -299,7 +299,7 @@ LEX::set_system_variable(enum enum_var_type var_type,
     sphead->m_flags|= sp_head::HAS_SET_AUTOCOMMIT_STMT;
 
   if (val && val->type() == Item::FIELD_ITEM &&
-      ((Item_field*)val)->table_name)
+      ((Item_field*)val)->table_name.str)
   {
     my_error(ER_WRONG_TYPE_FOR_VAR, MYF(0), sysvar->name.str);
     return TRUE;
@@ -339,7 +339,7 @@ bool LEX::set_trigger_new_row(const LEX_CSTRING *name, Item *val)
   trg_fld= new (thd->mem_root)
             Item_trigger_field(thd, current_context(),
                                Item_trigger_field::NEW_ROW,
-                               name, UPDATE_ACL, FALSE);
+                               *name, UPDATE_ACL, FALSE);
 
   if (unlikely(trg_fld == NULL))
     return TRUE;
@@ -1686,7 +1686,7 @@ bool my_yyoverflow(short **a, YYSTYPE **b, size_t *yystacksize);
    and until NEXT_SYM / PREVIOUS_SYM.
 */
 %left   PREC_BELOW_IDENTIFIER_OPT_SPECIAL_CASE
-%left   TRANSACTION_SYM TIMESTAMP PERIOD_SYM SYSTEM USER
+%left   TRANSACTION_SYM TIMESTAMP PERIOD_SYM SYSTEM USER COMMENT_SYM
 
 
 /*
@@ -2793,6 +2793,7 @@ create:
         | create_or_replace DATABASE opt_if_not_exists ident
           {
             Lex->create_info.default_table_charset= NULL;
+            Lex->create_info.schema_comment= NULL;
             Lex->create_info.used_fields= 0;
             if (Lex->main_select_push())
               MYSQL_YYABORT;
@@ -3508,12 +3509,8 @@ optionally_qualified_column_ident:
 row_field_name:
           ident
           {
-            if (unlikely(check_string_char_length(&$1, 0, NAME_CHAR_LEN,
-                                                  system_charset_info, 1)))
-              my_yyabort_error((ER_TOO_LONG_IDENT, MYF(0), $1.str));
-            if (unlikely(!($$= new (thd->mem_root) Spvar_definition())))
+            if (!($$= Lex->row_field_name(thd, $1)))
               MYSQL_YYABORT;
-            Lex->init_last_field($$, &$1, thd->variables.collation_database);
           }
         ;
 
@@ -3524,17 +3521,12 @@ row_field_definition:
 row_field_definition_list:
           row_field_definition
           {
-            if (unlikely(!($$= new (thd->mem_root) Row_definition_list())) ||
-                unlikely($$->push_back($1, thd->mem_root)))
+            if (!($$= Row_definition_list::make(thd->mem_root, $1)))
               MYSQL_YYABORT;
           }
         | row_field_definition_list ',' row_field_definition
           {
-            uint unused;
-            if (unlikely($1->find_row_field_by_name(&$3->field_name, &unused)))
-              my_yyabort_error((ER_DUP_FIELDNAME, MYF(0), $3->field_name.str));
-            $$= $1;
-            if (unlikely($$->push_back($3, thd->mem_root)))
+            if (($$= $1)->append_uniq(thd->mem_root, $3))
               MYSQL_YYABORT;
           }
         ;
@@ -5983,12 +5975,7 @@ opt_versioning_rotation:
          {
            partition_info *part_info= Lex->part_info;
            if (unlikely(part_info->vers_set_interval(thd, $2, $3, $4)))
-           {
-             my_error(ER_PART_WRONG_VALUE, MYF(0),
-                      Lex->create_last_non_select_table->table_name.str,
-                      "INTERVAL");
              MYSQL_YYABORT;
-           }
          }
        | LIMIT ulonglong_num
        {
@@ -6043,6 +6030,11 @@ create_database_options:
 create_database_option:
           default_collation {}
         | default_charset {}
+        | COMMENT_SYM opt_equal TEXT_STRING_sys
+          {
+            Lex->create_info.schema_comment= thd->make_clex_string($3);
+            Lex->create_info.used_fields|= HA_CREATE_USED_COMMENT;
+          }
         ;
 
 opt_if_not_exists_table_element:
@@ -6355,7 +6347,7 @@ versioning_option:
             {
               if (DBUG_EVALUATE_IF("sysvers_force", 0, 1))
               {
-                my_error(ER_VERS_TEMPORARY, MYF(0));
+                my_error(ER_VERS_NOT_SUPPORTED, MYF(0), "CREATE TEMPORARY TABLE");
                 MYSQL_YYABORT;
               }
             }
@@ -7764,6 +7756,7 @@ alter:
         | ALTER DATABASE ident_or_empty
           {
             Lex->create_info.default_table_charset= NULL;
+            Lex->create_info.schema_comment= NULL;
             Lex->create_info.used_fields= 0;
             if (Lex->main_select_push())
               MYSQL_YYABORT;
@@ -7777,6 +7770,22 @@ alter:
                 unlikely(lex->copy_db_to(&lex->name)))
               MYSQL_YYABORT;
             Lex->pop_select(); //main select
+          }
+        | ALTER DATABASE COMMENT_SYM opt_equal TEXT_STRING_sys
+          {
+            Lex->create_info.default_table_charset= NULL;
+            Lex->create_info.used_fields= 0;
+            Lex->create_info.schema_comment= thd->make_clex_string($5);
+            Lex->create_info.used_fields|= HA_CREATE_USED_COMMENT;
+          }
+          opt_create_database_options
+          {
+            LEX *lex=Lex;
+            lex->sql_command=SQLCOM_ALTER_DB;
+            lex->name= Lex_ident_sys();
+            if (lex->name.str == NULL &&
+                unlikely(lex->copy_db_to(&lex->name)))
+              MYSQL_YYABORT;
           }
         | ALTER DATABASE ident UPGRADE_SYM DATA_SYM DIRECTORY_SYM NAME_SYM
           {
@@ -8022,7 +8031,8 @@ opt_ev_sql_stmt:
         ;
 
 ident_or_empty:
-          /* empty */ { $$= Lex_ident_sys(); }
+          /* empty */
+          %prec PREC_BELOW_IDENTIFIER_OPT_SPECIAL_CASE { $$= Lex_ident_sys(); }
         | ident
         ;
 
@@ -9131,9 +9141,7 @@ select:
           opt_procedure_or_into
           {
             Lex->pop_select();
-            if ($1->set_lock_to_the_last_select($3))
-              MYSQL_YYABORT;
-            if (Lex->select_finalize($1))
+            if (Lex->select_finalize($1, $3))
               MYSQL_YYABORT;
           }
         | with_clause query_expression_body
@@ -9148,9 +9156,7 @@ select:
             Lex->pop_select();
             $2->set_with_clause($1);
             $1->attach_to($2->first_select());
-            if ($2->set_lock_to_the_last_select($4))
-              MYSQL_YYABORT;
-            if (Lex->select_finalize($2))
+            if (Lex->select_finalize($2, $4))
               MYSQL_YYABORT;
           }
         ;
@@ -9537,7 +9543,7 @@ select_item_list:
           {
             Item *item= new (thd->mem_root)
                           Item_field(thd, &thd->lex->current_select->context,
-                                     NULL, NULL, &star_clex_str);
+                                     star_clex_str);
             if (unlikely(item == NULL))
               MYSQL_YYABORT;
             if (unlikely(add_item_to_list(thd, item)))
@@ -9564,7 +9570,7 @@ select_item:
                           check_column_name($4.str)))
                 my_yyabort_error((ER_WRONG_COLUMN_NAME, MYF(0), $4.str));
               $2->is_autogenerated_name= FALSE;
-              $2->set_name(thd, $4.str, $4.length, system_charset_info);
+              $2->set_name(thd, $4);
             }
             else if (!$2->name.str || $2->name.str == item_empty_name)
             {
@@ -11180,7 +11186,7 @@ udf_expr:
             if ($4.str)
             {
               $2->is_autogenerated_name= FALSE;
-              $2->set_name(thd, $4.str, $4.length, system_charset_info);
+              $2->set_name(thd, $4);
             }
             /* 
                A field has to have its proper name in order for name
@@ -11735,6 +11741,7 @@ cast_type_numeric:
         | UNSIGNED                       { $$.set(&type_handler_ulonglong); }
         | UNSIGNED INT_SYM               { $$.set(&type_handler_ulonglong); }
         | DECIMAL_SYM float_options      { $$.set(&type_handler_newdecimal, $2); }
+        | FLOAT_SYM                      { $$.set(&type_handler_float); }
         | DOUBLE_SYM opt_precision       { $$.set(&type_handler_double, $2);  }
         ;
 
@@ -12911,7 +12918,7 @@ procedure_clause:
             lex->proc_list.next= &lex->proc_list.first;
             Item_field *item= new (thd->mem_root)
                                 Item_field(thd, &lex->current_select->context,
-                                           NULL, NULL, &$2);
+                                           $2);
             if (unlikely(item == NULL))
               MYSQL_YYABORT;
             if (unlikely(add_proc_to_list(thd, item)))
@@ -13289,7 +13296,7 @@ insert:
           insert_lock_option
           opt_ignore insert2
           {
-            Select->set_lock_for_tables($3);
+            Select->set_lock_for_tables($3, true);
             Lex->current_select= Lex->first_select_lex();
           }
           insert_field_spec opt_insert_update
@@ -13313,7 +13320,7 @@ replace:
           }
           replace_lock_option insert2
           {
-            Select->set_lock_for_tables($3);
+            Select->set_lock_for_tables($3, true);
             Lex->current_select= Lex->first_select_lex();
           }
           insert_field_spec
@@ -13586,15 +13593,14 @@ update:
           opt_low_priority opt_ignore update_table_list
           SET update_list
           {
-            LEX *lex= Lex;
-            if (lex->first_select_lex()->table_list.elements > 1)
-              lex->sql_command= SQLCOM_UPDATE_MULTI;
-            else if (lex->first_select_lex()->get_table_list()->derived)
+            SELECT_LEX *slex= Lex->first_select_lex();
+            if (slex->table_list.elements > 1)
+              Lex->sql_command= SQLCOM_UPDATE_MULTI;
+            else if (slex->get_table_list()->derived)
             {
               /* it is single table update and it is update of derived table */
               my_error(ER_NON_UPDATABLE_TABLE, MYF(0),
-                       lex->first_select_lex()->get_table_list()->alias.str,
-                       "UPDATE");
+                       slex->get_table_list()->alias.str, "UPDATE");
               MYSQL_YYABORT;
             }
             /*
@@ -13602,7 +13608,7 @@ update:
               be too pessimistic. We will decrease lock level if possible in
               mysql_multi_update().
             */
-            Select->set_lock_for_tables($3);
+            slex->set_lock_for_tables($3, slex->table_list.elements == 1);
           }
           opt_where_clause opt_order_clause delete_limit_clause
           {
@@ -15117,8 +15123,8 @@ literal:
               will include the introducer and the original hex/bin notation.
             */
             item_str= new (thd->mem_root)
-               Item_string_with_introducer(thd, NULL, $2->ptr(), $2->length(),
-                                           $1);
+               Item_string_with_introducer(thd, null_clex_str,
+                                           $2->lex_cstring(), $1);
             if (unlikely(!item_str ||
                          !item_str->check_well_formed_result(true)))
               MYSQL_YYABORT;
@@ -16694,13 +16700,16 @@ table_lock:
           {
             thr_lock_type lock_type= (thr_lock_type) $3;
             bool lock_for_write= (lock_type >= TL_WRITE_ALLOW_WRITE);
+            ulong table_options= lock_for_write ? TL_OPTION_UPDATING : 0;
+            enum_mdl_type mdl_type= !lock_for_write
+                                    ? MDL_SHARED_READ
+                                    : lock_type == TL_WRITE_CONCURRENT_INSERT
+                                      ? MDL_SHARED_WRITE
+                                      : MDL_SHARED_NO_READ_WRITE;
+
             if (unlikely(!Select->
-                         add_table_to_list(thd, $1, $2, 0, lock_type,
-                                           (lock_for_write ?
-                                            lock_type == TL_WRITE_CONCURRENT_INSERT ?
-                                            MDL_SHARED_WRITE :
-                                            MDL_SHARED_NO_READ_WRITE :
-                                            MDL_SHARED_READ))))
+                         add_table_to_list(thd, $1, $2, table_options,
+                                           lock_type, mdl_type)))
               MYSQL_YYABORT;
           }
         ;

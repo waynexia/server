@@ -12,7 +12,7 @@
 
  You should have received a copy of the GNU General Public License
  along with this program; if not, write to the Free Software
- Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301  USA */
+ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1335  USA */
 
 #include "mariadb.h"
 #include "sql_type.h"
@@ -132,6 +132,32 @@ bool Type_handler_data::init()
 
 
 Type_handler_data *type_handler_data= NULL;
+
+
+bool Float::to_string(String *val_buffer, uint dec) const
+{
+  uint to_length= 70;
+  if (val_buffer->alloc(to_length))
+    return true;
+
+  char *to=(char*) val_buffer->ptr();
+  size_t len;
+
+  if (dec >= FLOATING_POINT_DECIMALS)
+    len= my_gcvt(m_value, MY_GCVT_ARG_FLOAT, to_length - 1, to, NULL);
+  else
+  {
+    /*
+      We are safe here because the buffer length is 70, and
+      fabs(float) < 10^39, dec < FLOATING_POINT_DECIMALS. So the resulting string
+      will be not longer than 69 chars + terminating '\0'.
+    */
+    len= my_fcvt(m_value, (int) dec, to, NULL);
+  }
+  val_buffer->length((uint) len);
+  val_buffer->set_charset(&my_charset_numeric);
+  return false;
+}
 
 
 String_ptr::String_ptr(Item *item, String *buffer)
@@ -3410,6 +3436,196 @@ Field *Type_handler_set::make_table_field(const LEX_CSTRING *name,
                    attr.collation);
 }
 
+
+/*************************************************************************/
+
+Field *Type_handler_float::make_schema_field(TABLE *table,
+                                              const Record_addr &addr,
+                                              const ST_FIELD_INFO &def,
+                                              bool show_field) const
+{
+  Lex_cstring_strlen name(def.field_name);
+  return new (table->in_use->mem_root)
+     Field_float(addr.ptr(), def.field_length,
+                  addr.null_ptr(), addr.null_bit(),
+                  Field::NONE, &name,
+                  (uint8) NOT_FIXED_DEC,
+                  0/*zerofill*/, def.unsigned_flag());
+}
+
+
+Field *Type_handler_double::make_schema_field(TABLE *table,
+                                              const Record_addr &addr,
+                                              const ST_FIELD_INFO &def,
+                                              bool show_field) const
+{
+  Lex_cstring_strlen name(def.field_name);
+  return new (table->in_use->mem_root)
+     Field_double(addr.ptr(), def.field_length,
+                  addr.null_ptr(), addr.null_bit(),
+                  Field::NONE, &name,
+                  (uint8) NOT_FIXED_DEC,
+                  0/*zerofill*/, def.unsigned_flag());
+}
+
+
+Field *Type_handler_decimal_result::make_schema_field(TABLE *table,
+                                                      const Record_addr &addr,
+                                                      const ST_FIELD_INFO &def,
+                                                      bool show_field) const
+{
+  Lex_cstring_strlen name(def.field_name);
+  uint dec= def.field_length % 10;
+  uint prec= (def.field_length / 100) % 100;
+  DBUG_ASSERT(dec <= DECIMAL_MAX_SCALE);
+  uint32 len= my_decimal_precision_to_length(prec, dec, def.unsigned_flag());
+  return new (table->in_use->mem_root)
+     Field_new_decimal(addr.ptr(), len, addr.null_ptr(), addr.null_bit(),
+                       Field::NONE, &name,
+                       (uint8) dec, 0/*zerofill*/, def.unsigned_flag());
+}
+
+
+Field *Type_handler_blob_common::make_schema_field(TABLE *table,
+                                                   const Record_addr &addr,
+                                                   const ST_FIELD_INFO &def,
+                                                   bool show_field) const
+{
+  Lex_cstring_strlen name(def.field_name);
+  if (show_field)
+  {
+    return new (table->in_use->mem_root)
+       Field_blob(addr.ptr(), addr.null_ptr(), addr.null_bit(),
+                  Field::NONE, &name, table->s,
+                  length_bytes(),
+                  &my_charset_bin);
+  }
+  else
+    return new (table->in_use->mem_root)
+      Field_null(addr.ptr(), 0, Field::NONE, &name, &my_charset_bin);
+}
+
+
+Field *Type_handler_string::make_schema_field(TABLE *table,
+                                              const Record_addr &addr,
+                                              const ST_FIELD_INFO &def,
+                                              bool show_field) const
+{
+  DBUG_ASSERT(def.field_length);
+  Lex_cstring_strlen name(def.field_name);
+  uint32 octet_length= (uint32) def.field_length * 3;
+  if (def.field_length * 3 > MAX_FIELD_VARCHARLENGTH)
+  {
+    Field *field= new (table->in_use->mem_root)
+      Field_blob(addr.ptr(), addr.null_ptr(), addr.null_bit(), Field::NONE,
+                 &name, table->s, 4, system_charset_info);
+    if (field)
+      field->field_length= octet_length;
+    return field;
+  }
+  else if (show_field)
+  {
+    return new (table->in_use->mem_root)
+      Field_varstring(addr.ptr(), octet_length,
+                      HA_VARCHAR_PACKLENGTH(octet_length),
+                      addr.null_ptr(), addr.null_bit(),
+                      Field::NONE, &name,
+                      table->s, system_charset_info);
+  }
+  else
+    return new (table->in_use->mem_root)
+      Field_null(addr.ptr(), 0, Field::NONE, &name, system_charset_info);
+}
+
+
+Field *Type_handler_tiny::make_schema_field(TABLE *table,
+                                            const Record_addr &addr,
+                                            const ST_FIELD_INFO &def,
+                                            bool show_field) const
+{
+  Lex_cstring_strlen name(def.field_name);
+  return new (table->in_use->mem_root)
+           Field_tiny(addr.ptr(), def.field_length,
+                      addr.null_ptr(), addr.null_bit(), Field::NONE, &name,
+                      0/*zerofill*/, def.unsigned_flag());
+}
+
+
+Field *Type_handler_short::make_schema_field(TABLE *table,
+                                             const Record_addr &addr,
+                                             const ST_FIELD_INFO &def,
+                                             bool show_field) const
+{
+  Lex_cstring_strlen name(def.field_name);
+  return new (table->in_use->mem_root)
+           Field_short(addr.ptr(), def.field_length,
+                       addr.null_ptr(), addr.null_bit(), Field::NONE, &name,
+                       0/*zerofill*/, def.unsigned_flag());
+}
+
+
+Field *Type_handler_long::make_schema_field(TABLE *table,
+                                            const Record_addr &addr,
+                                            const ST_FIELD_INFO &def,
+                                            bool show_field) const
+{
+  Lex_cstring_strlen name(def.field_name);
+  return new (table->in_use->mem_root)
+           Field_long(addr.ptr(), def.field_length,
+                      addr.null_ptr(), addr.null_bit(), Field::NONE, &name,
+                      0/*zerofill*/, def.unsigned_flag());
+}
+
+
+Field *Type_handler_longlong::make_schema_field(TABLE *table,
+                                                const Record_addr &addr,
+                                                const ST_FIELD_INFO &def,
+                                                bool show_field) const
+{
+  Lex_cstring_strlen name(def.field_name);
+  return new (table->in_use->mem_root)
+           Field_longlong(addr.ptr(), def.field_length,
+                          addr.null_ptr(), addr.null_bit(), Field::NONE, &name,
+                          0/*zerofill*/, def.unsigned_flag());
+}
+
+
+Field *Type_handler_date_common::make_schema_field(TABLE *table,
+                                                   const Record_addr &addr,
+                                                   const ST_FIELD_INFO &def,
+                                                   bool show_field) const
+{
+  Lex_cstring_strlen name(def.field_name);
+  return new (table->in_use->mem_root)
+           Field_newdate(addr.ptr(), addr.null_ptr(), addr.null_bit(),
+                         Field::NONE, &name);
+}
+
+
+Field *Type_handler_time_common::make_schema_field(TABLE *table,
+                                                   const Record_addr &addr,
+                                                   const ST_FIELD_INFO &def,
+                                                   bool show_field) const
+{
+  Lex_cstring_strlen name(def.field_name);
+  return new_Field_time(table->in_use->mem_root,
+                        addr.ptr(), addr.null_ptr(), addr.null_bit(),
+                        Field::NONE, &name, def.fsp());
+}
+
+
+Field *Type_handler_datetime_common::make_schema_field(TABLE *table,
+                                                       const Record_addr &addr,
+                                                       const ST_FIELD_INFO &def,
+                                                       bool show_field) const
+{
+  Lex_cstring_strlen name(def.field_name);
+  return new_Field_datetime(table->in_use->mem_root,
+                             addr.ptr(), addr.null_ptr(), addr.null_bit(),
+                             Field::NONE, &name, def.fsp());
+}
+
+
 /*************************************************************************/
 
 /*
@@ -3747,9 +3963,15 @@ Type_handler_year::Item_get_cache(THD *thd, const Item *item) const
 }
 
 Item_cache *
-Type_handler_real_result::Item_get_cache(THD *thd, const Item *item) const
+Type_handler_double::Item_get_cache(THD *thd, const Item *item) const
 {
-  return new (thd->mem_root) Item_cache_real(thd);
+  return new (thd->mem_root) Item_cache_double(thd);
+}
+
+Item_cache *
+Type_handler_float::Item_get_cache(THD *thd, const Item *item) const
+{
+  return new (thd->mem_root) Item_cache_float(thd);
 }
 
 Item_cache *
@@ -4490,7 +4712,7 @@ void Type_handler_temporal_result::Item_get_date(THD *thd, Item *item,
 longlong Type_handler_real_result::
            Item_val_int_signed_typecast(Item *item) const
 {
-  return item->val_int_signed_typecast_from_int();
+  return item->val_int_signed_typecast_from_real();
 }
 
 longlong Type_handler_int_result::
@@ -4502,7 +4724,7 @@ longlong Type_handler_int_result::
 longlong Type_handler_decimal_result::
            Item_val_int_signed_typecast(Item *item) const
 {
-  return item->val_int();
+  return VDec(item).to_longlong(false);
 }
 
 longlong Type_handler_temporal_result::
@@ -4522,7 +4744,7 @@ longlong Type_handler_string_result::
 longlong Type_handler_real_result::
            Item_val_int_unsigned_typecast(Item *item) const
 {
-  return item->val_int_unsigned_typecast_from_int();
+  return item->val_int_unsigned_typecast_from_real();
 }
 
 longlong Type_handler_int_result::
@@ -4535,6 +4757,32 @@ longlong Type_handler_temporal_result::
            Item_val_int_unsigned_typecast(Item *item) const
 {
   return item->val_int_unsigned_typecast_from_int();
+}
+
+longlong Type_handler_time_common::
+           Item_val_int_unsigned_typecast(Item *item) const
+{
+  /*
+    TODO: this should eventually be fixed to do rounding
+    when TIME_ROUND_FRACTIONAL is enabled, together with
+    Field_{tiny|short|long|longlong}::store_time_dec().
+    See MDEV-19502.
+  */
+  THD *thd= current_thd;
+  Time tm(thd, item);
+  DBUG_ASSERT(!tm.is_valid_time() == item->null_value);
+  if (!tm.is_valid_time())
+    return 0;
+  longlong res= tm.to_longlong();
+  if (res < 0)
+  {
+    push_warning_printf(thd, Sql_condition::WARN_LEVEL_NOTE,
+                        ER_DATA_OVERFLOW, ER_THD(thd, ER_DATA_OVERFLOW),
+                        ErrConvTime(tm.get_mysql_time()).ptr(),
+                        "UNSIGNED BIGINT");
+    return 0;
+  }
+  return res;
 }
 
 longlong Type_handler_string_result::
@@ -4704,13 +4952,24 @@ Type_handler_int_result::Item_func_hybrid_field_type_get_date(
 /***************************************************************************/
 
 String *
-Type_handler_real_result::Item_func_hybrid_field_type_val_str(
+Type_handler_double::Item_func_hybrid_field_type_val_str(
                                            Item_func_hybrid_field_type *item,
                                            String *str) const
 {
   return item->val_str_from_real_op(str);
 }
 
+String *
+Type_handler_float::Item_func_hybrid_field_type_val_str(
+                                           Item_func_hybrid_field_type *item,
+                                           String *str) const
+{
+  Float nr(item->real_op());
+  if (item->null_value)
+    return 0;
+  nr.to_string(str, item->decimals);
+  return str;
+}
 
 double
 Type_handler_real_result::Item_func_hybrid_field_type_val_real(
@@ -5234,10 +5493,21 @@ String *Type_handler_decimal_result::
 }
 
 
-String *Type_handler_real_result::
+String *Type_handler_double::
           Item_func_min_max_val_str(Item_func_min_max *func, String *str) const
 {
   return func->val_string_from_real(str);
+}
+
+
+String *Type_handler_float::
+          Item_func_min_max_val_str(Item_func_min_max *func, String *str) const
+{
+  Float nr(func->val_real());
+  if (func->null_value)
+    return 0;
+  nr.to_string(str, func->decimals);
+  return str;
 }
 
 
@@ -5863,6 +6133,14 @@ bool Type_handler::
 
 
 bool Type_handler::
+       Item_float_typecast_fix_length_and_dec(Item_float_typecast *item) const
+{
+  item->fix_length_and_dec_generic();
+  return false;
+}
+
+
+bool Type_handler::
        Item_decimal_typecast_fix_length_and_dec(Item_decimal_typecast *item) const
 {
   item->fix_length_and_dec_generic();
@@ -5946,6 +6224,13 @@ bool Type_handler_geometry::
 
 bool Type_handler_geometry::
        Item_double_typecast_fix_length_and_dec(Item_double_typecast *item) const
+{
+  return Item_func_or_sum_illegal_param(item);
+}
+
+
+bool Type_handler_geometry::
+       Item_float_typecast_fix_length_and_dec(Item_float_typecast *item) const
 {
   return Item_func_or_sum_illegal_param(item);
 }
@@ -6793,10 +7078,10 @@ Item *Type_handler_string_result::
   String *result= item->val_str(&tmp);
   if (item->null_value)
     return new (thd->mem_root) Item_null(thd, item->name.str);
-  uint length= result->length();
-  char *tmp_str= thd->strmake(result->ptr(), length);
-  return new (thd->mem_root) Item_string(thd, item->name.str,
-                                         tmp_str, length, result->charset());
+  LEX_CSTRING value;
+  thd->make_lex_string(&value, result->ptr(), result->length());
+  return new (thd->mem_root) Item_string(thd, item->name, value,
+                                         result->charset());
 }
 
 
@@ -6994,6 +7279,15 @@ Item *Type_handler_double::
                            DECIMAL_MAX_PRECISION, NOT_FIXED_DEC - 1, item))
     return NULL;
   return new (thd->mem_root) Item_double_typecast(thd, item, len, dec);
+}
+
+
+Item *Type_handler_float::
+        create_typecast_item(THD *thd, Item *item,
+                             const Type_cast_attributes &attr) const
+{
+  DBUG_ASSERT(!attr.length_specified());
+  return new (thd->mem_root) Item_float_typecast(thd, item);
 }
 
 
@@ -8219,48 +8513,60 @@ Type_handler_timestamp_common::Item_param_val_native(THD *thd,
     TIME_to_native(thd, &ltime, to, item->datetime_precision(thd));
 }
 
-static bool charsets_are_compatible(const char *old_cs_name,
-                                    const CHARSET_INFO *new_ci)
+
+LEX_CSTRING Charset::collation_specific_name() const
 {
-  const char *new_cs_name= new_ci->csname;
+  /*
+    User defined collations can provide arbitrary names
+    for character sets and collations, so a collation
+    name not necessarily starts with the character set name.
+  */
+  size_t csname_length= strlen(m_charset->csname);
+  if (strncmp(m_charset->name, m_charset->csname, csname_length))
+    return {NULL, 0};
+  const char *ptr= m_charset->name + csname_length;
+  return {ptr, strlen(ptr) };
+}
 
-  if (!strcmp(old_cs_name, new_cs_name))
+
+bool
+Charset::encoding_allows_reinterpret_as(const CHARSET_INFO *cs) const
+{
+  if (!strcmp(m_charset->csname, cs->csname))
     return true;
 
-  if (!strcmp(old_cs_name, MY_UTF8MB3) && !strcmp(new_cs_name, MY_UTF8MB4))
+  if (!strcmp(m_charset->csname, MY_UTF8MB3) &&
+      !strcmp(cs->csname, MY_UTF8MB4))
     return true;
 
-  if (!strcmp(old_cs_name, "ascii") && !(new_ci->state & MY_CS_NONASCII))
-    return true;
-
-  if (!strcmp(old_cs_name, "ucs2") && !strcmp(new_cs_name, "utf16"))
-    return true;
-
+  /*
+    Originally we allowed here instat ALTER for ASCII-to-LATIN1
+    and UCS2-to-UTF16, but this was wrong:
+    - MariaDB's ascii is not a subset for 8-bit character sets
+      like latin1, because it allows storing bytes 0x80..0xFF as
+      "unassigned" characters (see MDEV-19285).
+    - MariaDB's ucs2 (as in Unicode-1.1) is not a subset for UTF16,
+      because they treat surrogate codes differently (MDEV-19284).
+  */
   return false;
 }
 
-bool Type_handler::Charsets_are_compatible(const CHARSET_INFO *old_ci,
-                                           const CHARSET_INFO *new_ci,
-                                           bool part_of_a_key)
+
+bool
+Charset::encoding_and_order_allow_reinterpret_as(CHARSET_INFO *cs) const
 {
-  const char *old_cs_name= old_ci->csname;
-  const char *new_cs_name= new_ci->csname;
-
-  if (!charsets_are_compatible(old_cs_name, new_ci))
-  {
-    return false;
-  }
-
-  if (!part_of_a_key)
-  {
+  /*
+    Test quickly if we have two exactly equal CHARSET_INFO pointers.
+    This also handles a special case with my_charset_bin:
+    it does not have a collation name specific part in CHARSET_INFO::name,
+    which is just "binary" (without a character set name prefix),
+    so the code with collation_specific_name() below won't work for it.
+  */
+  if (m_charset == cs)
     return true;
-  }
-
-  if (strcmp(old_ci->name + strlen(old_cs_name),
-             new_ci->name + strlen(new_cs_name)))
-  {
+  if (!encoding_allows_reinterpret_as(cs))
     return false;
-  }
-
-  return true;
+  LEX_CSTRING name0= collation_specific_name();
+  LEX_CSTRING name1= Charset(cs).collation_specific_name();
+  return name0.length && !cmp(&name0, &name1);
 }
