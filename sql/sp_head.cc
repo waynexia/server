@@ -13,7 +13,7 @@
 
    You should have received a copy of the GNU General Public License
    along with this program; if not, write to the Free Software
-   Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301  USA */
+   Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1335  USA */
 
 #include "mariadb.h"                          /* NO_EMBEDDED_ACCESS_CHECKS */
 #include "sql_priv.h"
@@ -1486,7 +1486,7 @@ sp_head::execute(THD *thd, bool merge_da_on_success)
       NULL. In this case, mysql_change_db() would generate an error.
     */
 
-    err_status|= mysql_change_db(thd, (LEX_CSTRING*) &saved_cur_db_name, TRUE);
+    err_status|= mysql_change_db(thd, (LEX_CSTRING*)&saved_cur_db_name, TRUE) != 0;
   }
   m_flags&= ~IS_INVOKED;
   if (m_parent)
@@ -2333,11 +2333,10 @@ sp_head::execute_procedure(THD *thd, List<Item> *args)
         break;
       }
 
-      Send_field *out_param_info= new (thd->mem_root) Send_field();
-      nctx->get_parameter(i)->make_send_field(thd, out_param_info);
-      out_param_info->db_name= m_db.str;
-      out_param_info->table_name= m_name.str;
-      out_param_info->org_table_name= m_name.str;
+      Send_field *out_param_info= new (thd->mem_root) Send_field(thd, nctx->get_parameter(i));
+      out_param_info->db_name= m_db;
+      out_param_info->table_name= m_name;
+      out_param_info->org_table_name= m_name;
       out_param_info->col_name= spvar->name;
       out_param_info->org_col_name= spvar->name;
 

@@ -20,7 +20,7 @@ FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
 
 You should have received a copy of the GNU General Public License along with
 this program; if not, write to the Free Software Foundation, Inc.,
-51 Franklin Street, Suite 500, Boston, MA 02110-1335 USA
+51 Franklin Street, Fifth Floor, Boston, MA 02110-1335 USA
 
 *****************************************************************************/
 
@@ -82,12 +82,6 @@ reduce the size of the log.
 
 /** Redo log system */
 log_t	log_sys;
-
-/** Whether to generate and require checksums on the redo log pages */
-my_bool	innodb_log_checksums;
-
-/** Pointer to the log checksum calculation function */
-log_checksum_func_t log_checksum_algorithm_ptr;
 
 /* Next log block number to do dummy record filling if no log records written
 for a while */
@@ -161,87 +155,42 @@ log_buf_pool_get_oldest_modification(void)
 @param[in]	len	requested minimum size in bytes */
 void log_buffer_extend(ulong len)
 {
-	byte	tmp_buf[OS_FILE_LOG_BLOCK_SIZE];
+	const ulong new_buf_size = ut_calc_align(len, srv_page_size);
+	byte* new_buf = static_cast<byte*>(
+		ut_malloc_dontdump(new_buf_size * 2));
+	TRASH_ALLOC(new_buf, new_buf_size * 2);
 
-	log_mutex_enter_all();
+	log_mutex_enter();
 
-	while (log_sys.is_extending) {
-		/* Another thread is trying to extend already.
-		Needs to wait for. */
-		log_mutex_exit_all();
-
-		log_buffer_flush_to_disk();
-
-		log_mutex_enter_all();
-
-		if (srv_log_buffer_size > len) {
-			/* Already extended enough by the others */
-			log_mutex_exit_all();
-			return;
-		}
+	if (len <= srv_log_buffer_size) {
+		/* Already extended enough by the others */
+		log_mutex_exit();
+		ut_free_dodump(new_buf, new_buf_size * 2);
+		return;
 	}
 
-	if (len >= srv_log_buffer_size / 2) {
-		DBUG_EXECUTE_IF("ib_log_buffer_is_short_crash",
-				DBUG_SUICIDE(););
+	ib::warn() << "The redo log transaction size " << len <<
+		" exceeds innodb_log_buffer_size="
+		<< srv_log_buffer_size << " / 2). Trying to extend it.";
 
-		/* log_buffer is too small. try to extend instead of crash. */
-		ib::warn() << "The redo log transaction size " << len <<
-			" exceeds innodb_log_buffer_size="
-			<< srv_log_buffer_size << " / 2). Trying to extend it.";
-	}
-
-	log_sys.is_extending = true;
-
-	while ((log_sys.buf_free ^ log_sys.buf_next_to_write)
-	       & (OS_FILE_LOG_BLOCK_SIZE - 1)) {
-		/* Buffer might have >1 blocks to write still. */
-		log_mutex_exit_all();
-
-		log_buffer_flush_to_disk();
-
-		log_mutex_enter_all();
-	}
-
-	ulong move_start = ut_2pow_round(log_sys.buf_free,
-					 ulong(OS_FILE_LOG_BLOCK_SIZE));
-	ulong move_end = log_sys.buf_free;
-
-	/* store the last log block in buffer */
-	ut_memcpy(tmp_buf, log_sys.buf + move_start,
-		  move_end - move_start);
-
-	log_sys.buf_free -= move_start;
-	log_sys.buf_next_to_write -= move_start;
-
-	/* free previous after getting the right address */
-	if (!log_sys.first_in_use) {
-		log_sys.buf -= srv_log_buffer_size;
-	}
-	ut_free_dodump(log_sys.buf, srv_log_buffer_size * 2);
-
-	/* reallocate log buffer */
-	srv_log_buffer_size = len;
-
-	log_sys.buf = static_cast<byte*>(
-		ut_malloc_dontdump(srv_log_buffer_size * 2));
-	TRASH_ALLOC(log_sys.buf, srv_log_buffer_size * 2);
-
+	const byte* old_buf_begin = log_sys.buf;
+	const ulong old_buf_size = srv_log_buffer_size;
+	byte* old_buf = log_sys.first_in_use
+		? log_sys.buf : log_sys.buf - old_buf_size;
+	srv_log_buffer_size = new_buf_size;
+	log_sys.buf = new_buf;
 	log_sys.first_in_use = true;
+	memcpy(log_sys.buf, old_buf_begin, log_sys.buf_free);
 
-	log_sys.max_buf_free = srv_log_buffer_size / LOG_BUF_FLUSH_RATIO
+	log_sys.max_buf_free = new_buf_size / LOG_BUF_FLUSH_RATIO
 		- LOG_BUF_FLUSH_MARGIN;
 
-	/* restore the last log block */
-	ut_memcpy(log_sys.buf, tmp_buf, move_end - move_start);
+	log_mutex_exit();
 
-	ut_ad(log_sys.is_extending);
-	log_sys.is_extending = false;
-
-	log_mutex_exit_all();
+	ut_free_dodump(old_buf, old_buf_size);
 
 	ib::info() << "innodb_log_buffer_size was extended to "
-		<< srv_log_buffer_size << ".";
+		<< new_buf_size << ".";
 }
 
 /** Calculate actual length in redo buffer and file including
@@ -348,20 +297,6 @@ log_reserve_and_open(
 
 loop:
 	ut_ad(log_mutex_own());
-
-	if (log_sys.is_extending) {
-		log_mutex_exit();
-
-		/* Log buffer size is extending. Writing up to the next block
-		should wait for the extending finished. */
-
-		os_thread_sleep(100000);
-
-		ut_ad(++count < 50);
-
-		log_mutex_enter();
-		goto loop;
-	}
 
 	/* Calculate an upper limit for the space the string may take in the
 	log buffer */
@@ -616,7 +551,6 @@ void log_t::create()
   last_printout_time= time(NULL);
 
   buf_next_to_write= 0;
-  is_extending= false;
   write_lsn= lsn;
   flushed_to_disk_lsn= 0;
   n_pending_flushes= 0;
@@ -669,6 +603,12 @@ void log_t::files::create(ulint n_files)
   lsn_offset= LOG_FILE_HDR_SIZE;
 }
 
+/** Update the log block checksum. */
+inline void log_block_store_checksum(byte* block)
+{
+	log_block_set_checksum(block, log_block_calc_checksum_crc32(block));
+}
+
 /******************************************************//**
 Writes a log file header to a log file space. */
 static
@@ -698,7 +638,7 @@ log_file_header_flush(
 	       LOG_HEADER_CREATOR_CURRENT);
 	ut_ad(LOG_HEADER_CREATOR_END - LOG_HEADER_CREATOR
 	      >= sizeof LOG_HEADER_CREATOR_CURRENT);
-	log_block_set_checksum(buf, log_block_calc_checksum_crc32(buf));
+	log_block_store_checksum(buf);
 
 	dest_offset = nth_file * log_sys.log.file_size;
 
@@ -707,8 +647,6 @@ log_file_header_flush(
 			      start_lsn, nth_file));
 
 	log_sys.n_log_ios++;
-
-	MONITOR_INC(MONITOR_LOG_IO);
 
 	srv_stats.os_log_pending_writes.inc();
 
@@ -721,19 +659,6 @@ log_file_header_flush(
 	       OS_FILE_LOG_BLOCK_SIZE, buf, NULL);
 
 	srv_stats.os_log_pending_writes.dec();
-}
-
-/******************************************************//**
-Stores a 4-byte checksum to the trailer checksum field of a log block
-before writing it to a log file. This checksum is used in recovery to
-check the consistency of a log block. */
-static
-void
-log_block_store_checksum(
-/*=====================*/
-	byte*	block)	/*!< in/out: pointer to a log block */
-{
-	log_block_set_checksum(block, log_block_calc_checksum(block));
 }
 
 /******************************************************//**
@@ -825,8 +750,6 @@ loop:
 
 	log_sys.n_log_ios++;
 
-	MONITOR_INC(MONITOR_LOG_IO);
-
 	srv_stats.os_log_pending_writes.inc();
 
 	ut_a((next_offset >> srv_page_size_shift) <= ULINT_MAX);
@@ -870,7 +793,6 @@ log_write_flush_to_disk_low()
 		fil_flush(SRV_LOG_SPACE_FIRST_ID);
 	}
 
-	MONITOR_DEC(MONITOR_PENDING_LOG_FLUSH);
 
 	log_mutex_enter();
 	if (do_flush) {
@@ -1013,7 +935,6 @@ loop:
 	if (flush_to_disk) {
 		log_sys.n_pending_flushes++;
 		log_sys.current_flush_lsn = log_sys.lsn;
-		MONITOR_INC(MONITOR_PENDING_LOG_FLUSH);
 		os_event_reset(log_sys.flush_event);
 
 		if (log_sys.buf_free == log_sys.buf_next_to_write) {
@@ -1315,7 +1236,7 @@ log_group_checkpoint(lsn_t end_lsn)
 			srv_log_buffer_size);
 	mach_write_to_8(buf + LOG_CHECKPOINT_END_LSN, end_lsn);
 
-	log_block_set_checksum(buf, log_block_calc_checksum_crc32(buf));
+	log_block_store_checksum(buf);
 
 	MONITOR_INC(MONITOR_PENDING_CHECKPOINT_WRITE);
 
@@ -1675,11 +1596,11 @@ loop:
 		} else {
 			ut_ad(!srv_dict_stats_thread_active);
 		}
-		if (recv_sys && recv_sys->flush_start) {
+		if (recv_sys.flush_start) {
 			/* This is in case recv_writer_thread was never
 			started, or buf_flush_page_cleaner_coordinator
 			failed to notice its termination. */
-			os_event_set(recv_sys->flush_start);
+			os_event_set(recv_sys.flush_start);
 		}
 	}
 #define COUNT_INTERVAL 600U
@@ -2009,13 +1930,7 @@ void log_t::close()
   buf = NULL;
 
   os_event_destroy(flush_event);
-
   rw_lock_free(&checkpoint_lock);
-  /* rw_lock_free() already called checkpoint_lock.~rw_lock_t();
-  tame the debug assertions when the destructor will be called once more. */
-  ut_ad(checkpoint_lock.magic_n == 0);
-  ut_d(checkpoint_lock.magic_n = RW_LOCK_MAGIC_N);
-
   mutex_free(&mutex);
   mutex_free(&write_mutex);
   mutex_free(&log_flush_order_mutex);
@@ -2023,7 +1938,7 @@ void log_t::close()
   if (!srv_read_only_mode && srv_scrub_log)
     os_event_destroy(log_scrub_event);
 
-  recv_sys_close();
+  recv_sys.close();
 }
 
 /******************************************************//**

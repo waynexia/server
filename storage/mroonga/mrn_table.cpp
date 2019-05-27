@@ -15,7 +15,7 @@
 
   You should have received a copy of the GNU Lesser General Public
   License along with this library; if not, write to the Free Software
-  Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+  Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1335  USA
 */
 
 #include "mrn_mysql.h"
@@ -1140,7 +1140,7 @@ st_mrn_slot_data *mrn_get_slot_data(THD *thd, bool can_create)
 {
   MRN_DBUG_ENTER_FUNCTION();
   st_mrn_slot_data *slot_data =
-    (st_mrn_slot_data*) *thd_ha_data(thd, mrn_hton_ptr);
+    (st_mrn_slot_data*) thd_get_ha_data(thd, mrn_hton_ptr);
   if (slot_data == NULL) {
     slot_data = (st_mrn_slot_data*) malloc(sizeof(st_mrn_slot_data));
     slot_data->last_insert_record_id = GRN_ID_NIL;
@@ -1149,7 +1149,7 @@ st_mrn_slot_data *mrn_get_slot_data(THD *thd, bool can_create)
     slot_data->disable_keys_create_info = NULL;
     slot_data->alter_connect_string = NULL;
     slot_data->alter_comment = NULL;
-    *thd_ha_data(thd, mrn_hton_ptr) = (void *) slot_data;
+    thd_set_ha_data(thd, mrn_hton_ptr, slot_data);
     {
       mrn::Lock lock(&mrn_allocated_thds_mutex);
       if (my_hash_insert(&mrn_allocated_thds, (uchar*) thd))

@@ -12,7 +12,7 @@
 
    You should have received a copy of the GNU General Public License
    along with this program; if not, write to the Free Software
-   Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301  USA */
+   Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1335  USA */
 
 
 /* Function with list databases, tables or fields */
@@ -1470,7 +1470,7 @@ bool mysqld_show_create_db(THD *thd, LEX_CSTRING *dbname,
                            LEX_CSTRING *orig_dbname,
                            const DDL_options_st &options)
 {
-  char buff[2048];
+  char buff[2048+DATABASE_COMMENT_MAXLEN];
   String buffer(buff, sizeof(buff), system_charset_info);
 #ifndef NO_EMBEDDED_ACCESS_CHECKS
   Security_context *sctx= thd->security_ctx;
@@ -1506,6 +1506,7 @@ bool mysqld_show_create_db(THD *thd, LEX_CSTRING *dbname,
   {
     *dbname= INFORMATION_SCHEMA_NAME;
     create.default_table_charset= system_charset_info;
+    create.schema_comment= NULL;
   }
   else
   {
@@ -1544,6 +1545,13 @@ bool mysqld_show_create_db(THD *thd, LEX_CSTRING *dbname,
       buffer.append(create.default_table_charset->name);
     }
     buffer.append(STRING_WITH_LEN(" */"));
+  }
+
+  if (create.schema_comment)
+  {
+    buffer.append(STRING_WITH_LEN(" COMMENT "));
+    append_unescaped(&buffer, create.schema_comment->str,
+                     create.schema_comment->length);
   }
   protocol->store(buffer.ptr(), buffer.length(), buffer.charset());
 
@@ -5306,14 +5314,17 @@ err:
 }
 
 
-bool store_schema_shemata(THD* thd, TABLE *table, LEX_CSTRING *db_name,
-                          CHARSET_INFO *cs)
+bool store_schema_schemata(THD* thd, TABLE *table, LEX_CSTRING *db_name,
+                           CHARSET_INFO *cs, LEX_CSTRING *schema_comment= NULL)
 {
   restore_record(table, s->default_values);
   table->field[0]->store(STRING_WITH_LEN("def"), system_charset_info);
   table->field[1]->store(db_name->str, db_name->length, system_charset_info);
   table->field[2]->store(cs->csname, strlen(cs->csname), system_charset_info);
   table->field[3]->store(cs->name, strlen(cs->name), system_charset_info);
+  if (schema_comment)
+    table->field[5]->store(schema_comment->str, schema_comment->length,
+                           system_charset_info);
   return schema_table_store_record(thd, table);
 }
 
@@ -5366,8 +5377,8 @@ int fill_schema_schemata(THD *thd, TABLE_LIST *tables, COND *cond)
     DBUG_ASSERT(db_name->length <= NAME_LEN);
     if (db_name == &INFORMATION_SCHEMA_NAME)
     {
-      if (store_schema_shemata(thd, table, db_name,
-                               system_charset_info))
+      if (store_schema_schemata(thd, table, db_name,
+                                system_charset_info))
         DBUG_RETURN(1);
       continue;
     }
@@ -5380,8 +5391,9 @@ int fill_schema_schemata(THD *thd, TABLE_LIST *tables, COND *cond)
 #endif
     {
       load_db_opt_by_name(thd, db_name->str, &create);
-      if (store_schema_shemata(thd, table, db_name,
-                               create.default_table_charset))
+      if (store_schema_schemata(thd, table, db_name,
+                                create.default_table_charset,
+                                create.schema_comment))
         DBUG_RETURN(1);
     }
   }
@@ -5670,7 +5682,7 @@ static int get_schema_tables_record(THD *thd, TABLE_LIST *tables,
       }
       if (file->ha_table_flags() & (HA_HAS_OLD_CHECKSUM | HA_HAS_NEW_CHECKSUM))
       {
-        table->field[18]->store((longlong) file->checksum(), TRUE);
+        table->field[18]->store((longlong) file->stats.checksum, TRUE);
         table->field[18]->set_notnull();
       }
     }
@@ -8152,14 +8164,11 @@ mark_all_fields_used_in_query(THD *thd,
 TABLE *create_schema_table(THD *thd, TABLE_LIST *table_list)
 {
   uint field_count;
-  Item *item, *all_items;
+  Item *all_items;
   TABLE *table;
-  List<Item> field_list;
   ST_SCHEMA_TABLE *schema_table= table_list->schema_table;
   ST_FIELD_INFO *fields_info= schema_table->fields_info;
   ST_FIELD_INFO *fields;
-  CHARSET_INFO *cs= system_charset_info;
-  MEM_ROOT *mem_root= thd->mem_root;
   MY_BITMAP bitmap;
   my_bitmap_map *buf;
   DBUG_ENTER("create_schema_table");
@@ -8178,138 +8187,21 @@ TABLE *create_schema_table(THD *thd, TABLE_LIST *table_list)
 
   mark_all_fields_used_in_query(thd, fields_info, &bitmap, all_items);
 
-  for (field_count=0; fields_info->field_name; fields_info++)
-  {
-    size_t field_name_length= strlen(fields_info->field_name);
-    switch (fields_info->field_type) {
-    case MYSQL_TYPE_TINY:
-    case MYSQL_TYPE_LONG:
-    case MYSQL_TYPE_SHORT:
-    case MYSQL_TYPE_LONGLONG:
-    case MYSQL_TYPE_INT24:
-      if (!(item= new (mem_root)
-            Item_return_int(thd, fields_info->field_name,
-                            fields_info->field_length,
-                            fields_info->field_type,
-                            fields_info->value)))
-      {
-        DBUG_RETURN(0);
-      }
-      item->unsigned_flag= (fields_info->field_flags & MY_I_S_UNSIGNED);
-      break;
-    case MYSQL_TYPE_DATE:
-      if (!(item=new (mem_root)
-            Item_return_date_time(thd, fields_info->field_name,
-                                  (uint)field_name_length,
-                                  fields_info->field_type)))
-        DBUG_RETURN(0);
-      break;
-    case MYSQL_TYPE_TIME:
-      if (!(item=new (mem_root)
-            Item_return_date_time(thd, fields_info->field_name,
-                                  (uint)field_name_length,
-                                  fields_info->field_type)))
-        DBUG_RETURN(0);
-      break;
-    case MYSQL_TYPE_TIMESTAMP:
-    case MYSQL_TYPE_DATETIME:
-      if (!(item=new (mem_root)
-            Item_return_date_time(thd, fields_info->field_name,
-                                  (uint)field_name_length,
-                                  fields_info->field_type,
-                                  fields_info->field_length)))
-        DBUG_RETURN(0);
-      item->decimals= fields_info->field_length;
-      break;
-    case MYSQL_TYPE_FLOAT:
-    case MYSQL_TYPE_DOUBLE:
-      if ((item= new (mem_root)
-           Item_float(thd, fields_info->field_name, 0.0,
-                      NOT_FIXED_DEC,
-                      fields_info->field_length)) == NULL)
-        DBUG_RETURN(NULL);
-      break;
-    case MYSQL_TYPE_DECIMAL:
-    case MYSQL_TYPE_NEWDECIMAL:
-      if (!(item= new (mem_root)
-            Item_decimal(thd, (longlong) fields_info->value, false)))
-      {
-        DBUG_RETURN(0);
-      }
-      /*
-        Create a type holder, as we want the type of the item to defined
-        the type of the object, not the value
-      */
-      if (!(item= new (mem_root) Item_type_holder(thd, item)))
-        DBUG_RETURN(0);
-      item->unsigned_flag= (fields_info->field_flags & MY_I_S_UNSIGNED);
-      item->decimals= fields_info->field_length%10;
-      item->max_length= (fields_info->field_length/100)%100;
-      if (item->unsigned_flag == 0)
-        item->max_length+= 1;
-      if (item->decimals > 0)
-        item->max_length+= 1;
-      item->set_name(thd, fields_info->field_name, field_name_length, cs);
-      break;
-    case MYSQL_TYPE_TINY_BLOB:
-    case MYSQL_TYPE_MEDIUM_BLOB:
-    case MYSQL_TYPE_LONG_BLOB:
-    case MYSQL_TYPE_BLOB:
-      if (bitmap_is_set(&bitmap, field_count))
-      {
-        if (!(item= new (mem_root)
-              Item_blob(thd, fields_info->field_name,
-                        fields_info->field_length)))
-        {
-          DBUG_RETURN(0);
-        }
-      }
-      else
-      {
-        if (!(item= new (mem_root)
-              Item_empty_string(thd, "", 0, cs)))
-        {
-          DBUG_RETURN(0);
-        }
-        item->set_name(thd, fields_info->field_name,
-                       field_name_length, cs);
-      }
-      break;
-    default:
-    {
-      bool show_field;
-      /* Don't let unimplemented types pass through. Could be a grave error. */
-      DBUG_ASSERT(fields_info->field_type == MYSQL_TYPE_STRING);
-
-      show_field= bitmap_is_set(&bitmap, field_count);
-      if (!(item= new (mem_root)
-            Item_empty_string(thd, "",
-                              show_field ? fields_info->field_length : 0, cs)))
-      {
-        DBUG_RETURN(0);
-      }
-      item->set_name(thd, fields_info->field_name,
-                     field_name_length, cs);
-      break;
-    }
-    }
-    field_list.push_back(item, thd->mem_root);
-    item->maybe_null= (fields_info->field_flags & MY_I_S_MAYBE_NULL);
-    field_count++;
-  }
   TMP_TABLE_PARAM *tmp_table_param =
     (TMP_TABLE_PARAM*) (thd->alloc(sizeof(TMP_TABLE_PARAM)));
   tmp_table_param->init();
-  tmp_table_param->table_charset= cs;
+  tmp_table_param->table_charset= system_charset_info;
   tmp_table_param->field_count= field_count;
   tmp_table_param->schema_table= 1;
   SELECT_LEX *select_lex= table_list->select_lex;
   bool keep_row_order= is_show_command(thd);
-  if (!(table= create_tmp_table(thd, tmp_table_param,
-                                field_list, (ORDER*) 0, 0, 0, 
-                                (select_lex->options | thd->variables.option_bits |
-                                 TMP_TABLE_ALL_COLUMNS), HA_POS_ERROR,
-                                &table_list->alias, false, keep_row_order)))
+  if (!(table= create_tmp_table_for_schema(thd, tmp_table_param,
+                                           *schema_table, bitmap,
+                                           (select_lex->options |
+                                            thd->variables.option_bits |
+                                            TMP_TABLE_ALL_COLUMNS),
+                                            table_list->alias,
+                                            keep_row_order)))
     DBUG_RETURN(0);
   my_bitmap_map* bitmaps=
     (my_bitmap_map*) thd->alloc(bitmap_buffer_size(field_count));
@@ -8345,15 +8237,12 @@ static int make_old_format(THD *thd, ST_SCHEMA_TABLE *schema_table)
   {
     if (field_info->old_name)
     {
-      LEX_CSTRING field_name= {field_info->field_name,
-                               strlen(field_info->field_name)};
+      LEX_CSTRING field_name= field_info->get_name();
       Item_field *field= new (thd->mem_root)
-        Item_field(thd, context, NullS, NullS, &field_name);
+        Item_field(thd, context, field_name);
       if (field)
       {
-        field->set_name(thd, field_info->old_name,
-                        strlen(field_info->old_name),
-                        system_charset_info);
+        field->set_name(thd, field_info->get_old_name());
         if (add_item_to_list(thd, field))
           return 1;
       }
@@ -8374,22 +8263,19 @@ int make_schemata_old_format(THD *thd, ST_SCHEMA_TABLE *schema_table)
   {
     ST_FIELD_INFO *field_info= &schema_table->fields_info[1];
     String buffer(tmp,sizeof(tmp), system_charset_info);
-    LEX_CSTRING field_name= {field_info->field_name,
-                             strlen(field_info->field_name) };
-
     Item_field *field= new (thd->mem_root) Item_field(thd, context,
-                                      NullS, NullS, &field_name);
+                                                      field_info->get_name());
     if (!field || add_item_to_list(thd, field))
       return 1;
     buffer.length(0);
-    buffer.append(field_info->old_name);
+    buffer.append(field_info->get_old_name());
     if (lex->wild && lex->wild->ptr())
     {
       buffer.append(STRING_WITH_LEN(" ("));
       buffer.append(lex->wild->ptr());
       buffer.append(')');
     }
-    field->set_name(thd, buffer.ptr(), buffer.length(), system_charset_info);
+    field->set_name(thd, buffer.lex_cstring());
   }
   return 0;
 }
@@ -8402,11 +8288,10 @@ int make_table_names_old_format(THD *thd, ST_SCHEMA_TABLE *schema_table)
   LEX *lex= thd->lex;
   Name_resolution_context *context= &lex->first_select_lex()->context;
   ST_FIELD_INFO *field_info= &schema_table->fields_info[2];
-  LEX_CSTRING field_name= {field_info->field_name,
-                           strlen(field_info->field_name) };
+  LEX_CSTRING field_name= Lex_cstring_strlen(field_info->field_name);
 
   buffer.length(0);
-  buffer.append(field_info->old_name);
+  buffer.append(field_info->get_old_name());
   buffer.append(&lex->first_select_lex()->db);
   if (lex->wild && lex->wild->ptr())
   {
@@ -8414,22 +8299,18 @@ int make_table_names_old_format(THD *thd, ST_SCHEMA_TABLE *schema_table)
     buffer.append(lex->wild->ptr());
     buffer.append(')');
   }
-  Item_field *field= new (thd->mem_root) Item_field(thd, context,
-                                    NullS, NullS, &field_name);
+  Item_field *field= new (thd->mem_root) Item_field(thd, context, field_name);
   if (add_item_to_list(thd, field))
     return 1;
-  field->set_name(thd, buffer.ptr(), buffer.length(), system_charset_info);
+  field->set_name(thd, buffer.lex_cstring());
   if (thd->lex->verbose)
   {
     field_info= &schema_table->fields_info[3];
-    LEX_CSTRING field_name2= {field_info->field_name,
-                              strlen(field_info->field_name) };
-    field= new (thd->mem_root) Item_field(thd, context, NullS, NullS,
-                                          &field_name2);
+    field= new (thd->mem_root) Item_field(thd, context,
+                                    Lex_cstring_strlen(field_info->field_name));
     if (add_item_to_list(thd, field))
       return 1;
-    field->set_name(thd, field_info->old_name, strlen(field_info->old_name),
-                    system_charset_info);
+    field->set_name(thd, field_info->get_old_name());
   }
   return 0;
 }
@@ -8445,19 +8326,15 @@ int make_columns_old_format(THD *thd, ST_SCHEMA_TABLE *schema_table)
   for (; *field_num >= 0; field_num++)
   {
     field_info= &schema_table->fields_info[*field_num];
-    LEX_CSTRING field_name= {field_info->field_name,
-                             strlen(field_info->field_name)};
     if (!thd->lex->verbose && (*field_num == 14 ||
                                *field_num == 18 ||
                                *field_num == 19))
       continue;
     Item_field *field= new (thd->mem_root) Item_field(thd, context,
-                                      NullS, NullS, &field_name);
+                                    Lex_cstring_strlen(field_info->field_name));
     if (field)
     {
-      field->set_name(thd, field_info->old_name,
-                      strlen(field_info->old_name),
-                      system_charset_info);
+      field->set_name(thd, field_info->get_old_name());
       if (add_item_to_list(thd, field))
         return 1;
     }
@@ -8476,15 +8353,11 @@ int make_character_sets_old_format(THD *thd, ST_SCHEMA_TABLE *schema_table)
   for (; *field_num >= 0; field_num++)
   {
     field_info= &schema_table->fields_info[*field_num];
-    LEX_CSTRING field_name= {field_info->field_name,
-                             strlen(field_info->field_name)};
     Item_field *field= new (thd->mem_root) Item_field(thd, context,
-                                      NullS, NullS, &field_name);
+                                    Lex_cstring_strlen(field_info->field_name));
     if (field)
     {
-      field->set_name(thd, field_info->old_name,
-                      strlen(field_info->old_name),
-                      system_charset_info);
+      field->set_name(thd, field_info->get_old_name());
       if (add_item_to_list(thd, field))
         return 1;
     }
@@ -8503,15 +8376,11 @@ int make_proc_old_format(THD *thd, ST_SCHEMA_TABLE *schema_table)
   for (; *field_num >= 0; field_num++)
   {
     field_info= &schema_table->fields_info[*field_num];
-    LEX_CSTRING field_name= {field_info->field_name,
-                             strlen(field_info->field_name)};
     Item_field *field= new (thd->mem_root) Item_field(thd, context,
-                                      NullS, NullS, &field_name);
+                                    Lex_cstring_strlen(field_info->field_name));
     if (field)
     {
-      field->set_name(thd, field_info->old_name,
-                      strlen(field_info->old_name),
-                      system_charset_info);
+      field->set_name(thd, field_info->get_old_name());
       if (add_item_to_list(thd, field))
         return 1;
     }
@@ -8553,7 +8422,6 @@ int mysql_schema_table(THD *thd, LEX *lex, TABLE_LIST *table_list)
     table->alias_name_used= my_strcasecmp(table_alias_charset,
                                           table_list->schema_table_name.str,
                                           table_list->alias.str);
-  table_list->table_name= table->s->table_name;
   table_list->table= table;
   table->next= thd->derived_tables;
   thd->derived_tables= table;
@@ -9044,6 +8912,8 @@ ST_FIELD_INFO schema_fields_info[]=
   {"DEFAULT_COLLATION_NAME", MY_CS_NAME_SIZE, MYSQL_TYPE_STRING, 0, 0, 0,
    SKIP_OPEN_TABLE},
   {"SQL_PATH", FN_REFLEN, MYSQL_TYPE_STRING, 0, 1, 0, SKIP_OPEN_TABLE},
+  {"SCHEMA_COMMENT", DATABASE_COMMENT_MAXLEN, MYSQL_TYPE_STRING, 0, 0, 0,
+   SKIP_OPEN_TABLE},
   {0, 0, MYSQL_TYPE_STRING, 0, 0, 0, SKIP_OPEN_TABLE}
 };
 
@@ -10105,7 +9975,7 @@ static bool show_create_trigger_impl(THD *thd, Trigger *trigger)
 
   Item_datetime_literal *tmp= (new (mem_root) 
                                Item_datetime_literal(thd, &zero_time, 2));
-  tmp->set_name(thd, STRING_WITH_LEN("Created"), system_charset_info);
+  tmp->set_name(thd, Lex_cstring(STRING_WITH_LEN("Created")));
   fields.push_back(tmp, mem_root);
 
   if (p->send_result_set_metadata(&fields,

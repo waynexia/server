@@ -20,7 +20,7 @@ FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
 
 You should have received a copy of the GNU General Public License along with
 this program; if not, write to the Free Software Foundation, Inc.,
-51 Franklin Street, Suite 500, Boston, MA 02110-1335 USA
+51 Franklin Street, Fifth Floor, Boston, MA 02110-1335 USA
 
 *****************************************************************************/
 
@@ -53,10 +53,6 @@ step which modifies the database, is started */
 #define LOG_CHECKPOINT_EXTRA_FREE	(8U << srv_page_size_shift)
 
 typedef ulint (*log_checksum_func_t)(const byte* log_block);
-
-/** Pointer to the log checksum calculation function. Protected with
-log_sys.mutex. */
-extern log_checksum_func_t log_checksum_algorithm_ptr;
 
 /** Append a string to the log.
 @param[in]	str		string
@@ -261,28 +257,10 @@ log_block_set_data_len(
 /*===================*/
 	byte*	log_block,	/*!< in/out: log block */
 	ulint	len);		/*!< in: data length */
-/************************************************************//**
-Calculates the checksum for a log block.
-@return checksum */
-UNIV_INLINE
-ulint
-log_block_calc_checksum(
-/*====================*/
-	const byte*	block);	/*!< in: log block */
-
-/** Calculates the checksum for a log block using the CRC32 algorithm.
+/** Calculate the CRC-32C checksum of a log block.
 @param[in]	block	log block
 @return checksum */
-UNIV_INLINE
-ulint
-log_block_calc_checksum_crc32(
-	const byte*	block);
-
-/** Calculates the checksum for a log block using the "no-op" algorithm.
-@return		the calculated checksum value */
-UNIV_INLINE
-ulint
-log_block_calc_checksum_none(const byte*);
+inline ulint log_block_calc_checksum_crc32(const byte* block);
 
 /************************************************************//**
 Gets a log block checksum field value.
@@ -359,9 +337,6 @@ Refreshes the statistics used to print per-second averages. */
 void
 log_refresh_stats(void);
 /*===================*/
-
-/** Whether to generate and require checksums on the redo log pages */
-extern my_bool	innodb_log_checksums;
 
 /* Values used as flags */
 #define LOG_FLUSH	7652559
@@ -523,7 +498,7 @@ struct log_t{
 					to the first half before freeing/resizing
 					must be undertaken. */
 	bool		first_in_use;	/*!< true if buf points to the first
-					half of the aligned(buf_ptr), false
+					half of the buffer, false
 					if the second half */
 	ulong		max_buf_free;	/*!< recommended maximum value of
 					buf_free for the buffer in use, after
@@ -607,8 +582,6 @@ struct log_t{
 					later; this is advanced when a flush
 					operation is completed to all the log
 					groups */
-	volatile bool	is_extending;	/*!< this is set to true during extend
-					the log buffer size */
 	lsn_t		write_lsn;	/*!< last written lsn */
 	lsn_t		current_flush_lsn;/*!< end lsn for the current running
 					write + flush operation */

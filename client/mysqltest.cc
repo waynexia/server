@@ -12,7 +12,7 @@
 
    You should have received a copy of the GNU General Public License
    along with this program; if not, write to the Free Software
-   Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA */
+   Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1335  USA */
 
 /*
   mysqltest
@@ -9116,7 +9116,7 @@ static void init_signal_handling(void)
   DBUG_ENTER("init_signal_handling");
 
 #ifdef HAVE_STACKTRACE
-  my_init_stacktrace();
+  my_init_stacktrace(0);
 #endif
 
   sa.sa_flags = SA_RESETHAND | SA_NODEFER;

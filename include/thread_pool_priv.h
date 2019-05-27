@@ -13,7 +13,7 @@
 
   You should have received a copy of the GNU General Public License
   along with this program; if not, write to the Free Software
-  Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301  USA
+  Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1335  USA
 */
 
 #ifndef THREAD_POOL_PRIV_INCLUDED
@@ -82,8 +82,6 @@ bool do_command(THD *thd);
   ensure that the proper MySQL Server logic attached to these events is
   executed.
 */
-/* Initialise a new connection handler thread */
-bool init_new_connection_handler_thread();
 /* Set up connection thread before use as execution thread */
 bool setup_connection_thread_globals(THD *thd);
 /* Prepare connection as part of connection set-up */
@@ -94,8 +92,6 @@ void mysql_audit_release(THD *thd);
 bool thd_is_connection_alive(THD *thd);
 /* Close connection with possible error code */
 void close_connection(THD *thd, uint errcode);
-/* Decrement connection counter */
-void dec_connection_count();
 /* Destroy THD object */
 void delete_thd(THD *thd);
 

@@ -14,7 +14,7 @@
 
    You should have received a copy of the GNU General Public License
    along with this program; if not, write to the Free Software
-   Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301  USA */
+   Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1335  USA */
 
 /*
   Because of the function make_new_field() all field classes that have static
@@ -1142,6 +1142,8 @@ public:
   {
     return Information_schema_character_attributes();
   }
+  virtual void update_data_type_statistics(Data_type_statistics *st) const
+  { }
   /*
     Caller beware: sql_type can change str.Ptr, so check
     ptr() to see if it changed if you are using your own buffer
@@ -1926,6 +1928,7 @@ protected:
                CHARSET_INFO *cs, size_t nchars);
   String *uncompress(String *val_buffer, String *val_ptr,
                      const uchar *from, uint from_length);
+  bool csinfo_change_allows_instant_alter(const Create_field *to) const;
 public:
   Field_longstr(uchar *ptr_arg, uint32 len_arg, uchar *null_ptr_arg,
                 uchar null_bit_arg, utype unireg_check_arg,
@@ -3565,6 +3568,11 @@ public:
   my_decimal *val_decimal(my_decimal *);
   int cmp(const uchar *,const uchar *);
   void sort_string(uchar *buff,uint length);
+  void update_data_type_statistics(Data_type_statistics *st) const
+  {
+    st->m_fixed_string_count++;
+    st->m_fixed_string_total_length+= pack_length();
+  }
   void sql_type(String &str) const;
   uint is_equal(Create_field *new_field);
   virtual uchar *pack(uchar *to, const uchar *from,
@@ -3661,6 +3669,11 @@ public:
     return Field_str::memcpy_field_possible(from) &&
            !compression_method() == !from->compression_method() &&
            length_bytes == ((Field_varstring*) from)->length_bytes;
+  }
+  void update_data_type_statistics(Data_type_statistics *st) const
+  {
+    st->m_variable_string_count++;
+    st->m_variable_string_total_length+= pack_length();
   }
   int  store(const char *to,size_t length,CHARSET_INFO *charset);
   using Field_str::store;
@@ -3867,6 +3880,10 @@ public:
     uint32 octets= Field_blob::character_octet_length();
     uint32 chars= octets / field_charset->mbminlen;
     return Information_schema_character_attributes(octets, chars);
+  }
+  void update_data_type_statistics(Data_type_statistics *st) const
+  {
+    st->m_blob_count++;
   }
   void make_send_field(Send_field *);
   Copy_func *get_copy_func(const Field *from) const
@@ -4344,6 +4361,10 @@ public:
     information_schema_numeric_attributes() const
   {
     return Information_schema_numeric_attributes(field_length);
+  }
+  void update_data_type_statistics(Data_type_statistics *st) const
+  {
+    st->m_uneven_bit_length+= field_length & 7;
   }
   uint size_of() const { return sizeof(*this); }
   int reset(void) { 
@@ -4851,6 +4872,14 @@ public:
     }
     return 0;
   }
+  static Row_definition_list *make(MEM_ROOT *mem_root, Spvar_definition *var)
+  {
+    Row_definition_list *list;
+    if (!(list= new (mem_root) Row_definition_list()))
+      return NULL;
+    return list->push_back(var, mem_root) ? NULL : list;
+  }
+  bool append_uniq(MEM_ROOT *thd, Spvar_definition *var);
   bool adjust_formal_params_to_actual_params(THD *thd, List<Item> *args);
   bool adjust_formal_params_to_actual_params(THD *thd,
                                              Item **args, uint arg_count);
@@ -5026,22 +5055,21 @@ class Send_field :public Sql_alloc,
                   public Type_handler_hybrid_field_type
 {
 public:
-  const char *db_name;
-  const char *table_name,*org_table_name;
+  LEX_CSTRING db_name;
+  LEX_CSTRING table_name, org_table_name;
   LEX_CSTRING col_name, org_col_name;
   ulong length;
   uint flags, decimals;
-  Send_field() {}
   Send_field(Field *field)
   {
     field->make_send_field(this);
-    DBUG_ASSERT(table_name != 0);
+    DBUG_ASSERT(table_name.str != 0);
     normalize();
   }
   Send_field(THD *thd, Item *item);
   Send_field(Field *field,
-             const char *db_name_arg,
-             const char *table_name_arg)
+             const LEX_CSTRING &db_name_arg,
+             const LEX_CSTRING &table_name_arg)
    :Type_handler_hybrid_field_type(field->type_handler()),
     db_name(db_name_arg),
     table_name(table_name_arg),

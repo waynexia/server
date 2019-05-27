@@ -12,7 +12,7 @@
 
    You should have received a copy of the GNU General Public License
    along with this program; if not, write to the Free Software
-   Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA */
+   Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1335  USA */
 
 
 /* Some general useful functions */
@@ -1768,7 +1768,8 @@ int TABLE_SHARE::init_from_binary_frm_image(THD *thd, bool write,
       name.length= str_db_type_length;
 
       plugin_ref tmp_plugin= ha_resolve_by_name(thd, &name, false);
-      if (tmp_plugin != NULL && !plugin_equals(tmp_plugin, se_plugin))
+      if (tmp_plugin != NULL && !plugin_equals(tmp_plugin, se_plugin) &&
+          legacy_db_type != DB_TYPE_S3)
       {
         if (se_plugin)
         {
@@ -2314,7 +2315,6 @@ int TABLE_SHARE::init_from_binary_frm_image(THD *thd, bool write,
         switch (handler->real_field_type())
         {
         case MYSQL_TYPE_TIMESTAMP2:
-        case MYSQL_TYPE_DATETIME2:
           break;
         case MYSQL_TYPE_LONGLONG:
           if (vers_can_native)
@@ -3585,10 +3585,6 @@ enum open_frm_error open_table_from_share(THD *thd, TABLE_SHARE *share,
     goto err;
 
   outparam->alias.set(tmp_alias, alias->length, table_alias_charset);
-  outparam->quick_keys.init();
-  outparam->covering_keys.init();
-  outparam->intersect_keys.init();
-  outparam->keys_in_use_for_query.init();
 
   /* Allocate handler */
   outparam->file= 0;
@@ -6392,8 +6388,8 @@ Item *create_view_field(THD *thd, TABLE_LIST *view, Item **field_ref,
                                      &view->view->first_select_lex()->context:
                                      &thd->lex->first_select_lex()->context);
   Item *item= (new (thd->mem_root)
-               Item_direct_view_ref(thd, context, field_ref, view->alias.str,
-                                    name, view));
+               Item_direct_view_ref(thd, context, field_ref, view->alias,
+                                    *name, view));
   if (!item)
     return NULL;
   /*
@@ -6519,7 +6515,8 @@ const char *Field_iterator_table_ref::get_table_name()
     return natural_join_it.column_ref()->safe_table_name();
 
   DBUG_ASSERT(!strcmp(table_ref->table_name.str,
-                      table_ref->table->s->table_name.str));
+                      table_ref->table->s->table_name.str) ||
+              table_ref->schema_table);
   return table_ref->table_name.str;
 }
 

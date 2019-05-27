@@ -11,7 +11,7 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program; if not, write to the Free Software
-# Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
+# Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1335  USA
 
 
 OPTION(WITH_MARIABACKUP "Include mariabackup" ON)
@@ -52,8 +52,8 @@ ELSE()
   SET(NT_SERVICE_SOURCE)
 ENDIF()
 
-ADD_DEFINITIONS(-DPCRE_STATIC=1 -DHAVE_OPENSSL=1)
-
+ADD_DEFINITIONS(-DPCRE_STATIC=1)
+ADD_DEFINITIONS(${SSL_DEFINES})
 MYSQL_ADD_EXECUTABLE(mariabackup
   xtrabackup.cc
   innobackupex.cc

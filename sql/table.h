@@ -14,7 +14,7 @@
 
    You should have received a copy of the GNU General Public License
    along with this program; if not, write to the Free Software
-   Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301  USA */
+   Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1335  USA */
 
 #include "sql_plist.h"
 #include "sql_list.h"                           /* Sql_alloc */
@@ -1025,6 +1025,8 @@ struct TABLE_SHARE
   void set_overlapped_keys();
 };
 
+/* not NULL, but cannot be dereferenced */
+#define UNUSABLE_TABLE_SHARE ((TABLE_SHARE*)1)
 
 /**
    Class is used as a BLOB field value storage for
@@ -1668,7 +1670,7 @@ bool fk_modifies_child(enum_fk_option opt);
 #define OPEN_FRM_ONLY   1U               // open FRM file only
 #define OPEN_FULL_TABLE 2U               // open FRM,MYD, MYI files
 
-typedef struct st_field_info
+struct ST_FIELD_INFO
 {
   /** 
       This is used as column name. 
@@ -1701,7 +1703,22 @@ typedef struct st_field_info
      @c OPEN_FRM_ONLY or @c OPEN_FULL_TABLE.
   */
   uint open_method;
-} ST_FIELD_INFO;
+
+  LEX_CSTRING get_name() const
+  {
+    return LEX_CSTRING({field_name, strlen(field_name)});
+  }
+  LEX_CSTRING get_old_name() const
+  {
+    return LEX_CSTRING({old_name, strlen(old_name)});
+  }
+  bool unsigned_flag() const { return field_flags & MY_I_S_UNSIGNED; }
+  uint fsp() const
+  {
+    DBUG_ASSERT(field_length <= TIME_SECOND_PART_DIGITS);
+    return field_length;
+  }
+};
 
 
 struct TABLE_LIST;
@@ -2021,6 +2038,7 @@ struct TABLE_LIST
     table_name= *table_name_arg;
     alias= (alias_arg ? *alias_arg : *table_name_arg);
     lock_type= lock_type_arg;
+    updating= lock_type >= TL_WRITE_ALLOW_WRITE;
     mdl_request.init(MDL_key::TABLE, db.str, table_name.str, mdl_type,
                      MDL_TRANSACTION);
   }

@@ -71,6 +71,16 @@ class Lex_cstring : public LEX_CSTRING
   }
 };
 
+
+class Lex_cstring_strlen: public Lex_cstring
+{
+public:
+  Lex_cstring_strlen(const char *from)
+   :Lex_cstring(from, from ? strlen(from) : 0)
+  { }
+};
+
+
 template <class Compare>
 struct Lex_cstring_with_compare : public Lex_cstring
 {

@@ -13,7 +13,7 @@ FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
 
 You should have received a copy of the GNU General Public License along with
 this program; if not, write to the Free Software Foundation, Inc.,
-51 Franklin Street, Suite 500, Boston, MA 02110-1335 USA
+51 Franklin Street, Fifth Floor, Boston, MA 02110-1335 USA
 
 *****************************************************************************/
 
@@ -41,6 +41,14 @@ Created 2011-05-26 Marko Makela
 #include <sql_class.h>
 #include <algorithm>
 #include <map>
+
+#ifdef HAVE_WOLFSSL
+// Workaround for MDEV-19582
+// (WolfSSL reads memory out of bounds with decryption/NOPAD)
+#define WOLFSSL_PAD_SIZE MY_AES_BLOCK_SIZE
+#else
+#define WOLFSSL_PAD_SIZE 0
+#endif
 
 Atomic_counter<ulint> onlineddl_rowlog_rows;
 ulint onlineddl_rowlog_pct_used;
@@ -293,7 +301,8 @@ row_log_block_allocate(
 		);
 
 		log_buf.block = ut_allocator<byte>(mem_key_row_log_buf)
-			.allocate_large(srv_sort_buf_size, &log_buf.block_pfx);
+			.allocate_large(srv_sort_buf_size + WOLFSSL_PAD_SIZE,
+					&log_buf.block_pfx);
 
 		if (log_buf.block == NULL) {
 			DBUG_RETURN(false);
@@ -313,7 +322,8 @@ row_log_block_free(
 	DBUG_ENTER("row_log_block_free");
 	if (log_buf.block != NULL) {
 		ut_allocator<byte>(mem_key_row_log_buf).deallocate_large(
-			log_buf.block, &log_buf.block_pfx, log_buf.size);
+			log_buf.block, &log_buf.block_pfx,
+			log_buf.size + WOLFSSL_PAD_SIZE);
 		log_buf.block = NULL;
 	}
 	DBUG_VOID_RETURN;
@@ -3111,7 +3121,7 @@ row_log_table_apply(
 
 	stage->begin_phase_log_table();
 
-	ut_ad(!rw_lock_own(dict_operation_lock, RW_LOCK_S));
+	ut_ad(!rw_lock_own(&dict_sys.latch, RW_LOCK_S));
 	clust_index = dict_table_get_first_index(old_table);
 
 	if (clust_index->online_log->n_rows == 0) {
@@ -3231,7 +3241,7 @@ row_log_allocate(
 	index->online_log = log;
 
 	if (log_tmp_is_encrypted()) {
-		ulint size = srv_sort_buf_size;
+		ulint size = srv_sort_buf_size + WOLFSSL_PAD_SIZE;
 		log->crypt_head = static_cast<byte *>(os_mem_alloc_large(&size));
 		log->crypt_tail = static_cast<byte *>(os_mem_alloc_large(&size));
 
@@ -3265,11 +3275,13 @@ row_log_free(
 	row_merge_file_destroy_low(log->fd);
 
 	if (log->crypt_head) {
-		os_mem_free_large(log->crypt_head, srv_sort_buf_size);
+		os_mem_free_large(log->crypt_head, srv_sort_buf_size
+				  + WOLFSSL_PAD_SIZE);
 	}
 
 	if (log->crypt_tail) {
-		os_mem_free_large(log->crypt_tail, srv_sort_buf_size);
+		os_mem_free_large(log->crypt_tail, srv_sort_buf_size
+				  + WOLFSSL_PAD_SIZE);
 	}
 
 	mutex_free(&log->mutex);

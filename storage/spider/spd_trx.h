@@ -12,7 +12,7 @@
 
   You should have received a copy of the GNU General Public License
   along with this program; if not, write to the Free Software
-  Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA */
+  Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1335 USA */
 
 int spider_free_trx_conn(
   SPIDER_TRX *trx,
@@ -80,7 +80,8 @@ SPIDER_TRX *spider_get_trx(
 
 int spider_free_trx(
   SPIDER_TRX *trx,
-  bool need_lock
+  bool need_lock,
+  bool reset_ha_data= true
 );
 
 int spider_check_and_set_trx_isolation(

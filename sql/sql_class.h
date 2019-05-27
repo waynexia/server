@@ -13,7 +13,7 @@
 
    You should have received a copy of the GNU General Public License
    along with this program; if not, write to the Free Software
-   Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA */
+   Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1335  USA */
 
 #ifndef SQL_CLASS_INCLUDED
 #define SQL_CLASS_INCLUDED
@@ -39,6 +39,7 @@
 #include "thr_timer.h"
 #include "thr_malloc.h"
 #include "log_slow.h"      /* LOG_SLOW_DISABLE_... */
+#include <my_tree.h>
 #include "sql_digest_stream.h"            // sql_digest_state
 #include <mysql/psi/mysql_stage.h>
 #include <mysql/psi/mysql_statement.h>
@@ -3059,7 +3060,6 @@ public:
   uint8      password; /* 0, 1 or 2 */
   uint8      failed_com_change_user;
   bool       slave_thread;
-  bool       extra_port;                        /* If extra connection */
   bool	     no_errors;
 
   /**
@@ -3624,6 +3624,18 @@ public:
   inline void* trans_alloc(size_t size)
   {
     return alloc_root(&transaction.mem_root,size);
+  }
+
+  LEX_CSTRING strmake_lex_cstring(const char *str, size_t length)
+  {
+    const char *tmp= strmake_root(mem_root, str, length);
+    if (!tmp)
+      return {0,0};
+    return {tmp, length};
+  }
+  LEX_CSTRING strmake_lex_cstring(const LEX_CSTRING &from)
+  {
+    return strmake_lex_cstring(from.str, from.length);
   }
 
   LEX_STRING *make_lex_string(LEX_STRING *lex_str, const char* str, size_t length)

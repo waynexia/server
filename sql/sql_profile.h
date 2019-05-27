@@ -11,7 +11,7 @@
 
    You should have received a copy of the GNU General Public License
    along with this program; if not, write to the Free Software
-   Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301  USA */
+   Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1335  USA */
 
 #ifndef _SQL_PROFILE_H
 #define _SQL_PROFILE_H
@@ -19,7 +19,7 @@
 class Item;
 struct TABLE_LIST;
 class THD;
-typedef struct st_field_info ST_FIELD_INFO;
+struct ST_FIELD_INFO;
 typedef struct st_schema_table ST_SCHEMA_TABLE;
 
 extern ST_FIELD_INFO query_profile_statistics_info[];

@@ -20,7 +20,7 @@ FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
 
 You should have received a copy of the GNU General Public License along with
 this program; if not, write to the Free Software Foundation, Inc.,
-51 Franklin Street, Suite 500, Boston, MA 02110-1335 USA
+51 Franklin Street, Fifth Floor, Boston, MA 02110-1335 USA
 
 *****************************************************************************/
 
@@ -1253,10 +1253,10 @@ buf_madvise_do_dump()
 			      srv_log_buffer_size * 2,
 			      MADV_DODUMP);
 	}
-	/* mirrors recv_sys_init() */
-	if (recv_sys->buf)
+	/* mirrors recv_sys_t::create() */
+	if (recv_sys.buf)
 	{
-		ret+= madvise(recv_sys->buf, recv_sys->len, MADV_DODUMP);
+		ret+= madvise(recv_sys.buf, recv_sys.len, MADV_DODUMP);
 	}
 
 	buf_pool_mutex_enter_all();
@@ -1770,7 +1770,7 @@ buf_chunk_not_freed(
 				      == block->page.newest_modification);
 				ut_ad(block->page.oldest_modification == 0
 				      || block->page.oldest_modification
-				      == recv_sys->recovered_lsn
+				      == recv_sys.recovered_lsn
 				      || srv_force_recovery
 				      == SRV_FORCE_NO_LOG_REDO);
 				ut_ad(block->page.buf_fix_count == 0);
@@ -3089,8 +3089,7 @@ calc_buf_pool_size:
 		btr_search_sys_resize(
 			buf_pool_get_curr_size() / sizeof(void*) / 64);
 
-		/* normalize dict_sys */
-		dict_resize();
+		dict_sys.resize();
 
 		ib::info() << "Resized hash tables at lock_sys,"
 #ifdef BTR_CUR_HASH_ADAPT
@@ -5572,9 +5571,9 @@ buf_page_create(
 							  mtr);
 		}
 
-		mutex_exit(&recv_sys->mutex);
+		mutex_exit(&recv_sys.mutex);
 		block = buf_page_get_with_no_latch(page_id, zip_size, mtr);
-		mutex_enter(&recv_sys->mutex);
+		mutex_enter(&recv_sys.mutex);
 		return block;
 	}
 

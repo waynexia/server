@@ -13,7 +13,7 @@
 
    You should have received a copy of the GNU General Public License
    along with this program; if not, write to the Free Software
-   Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA */
+   Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1335  USA */
 
 /*
   Handling of uchar arrays as large bitmaps.
@@ -37,17 +37,6 @@
 #include <my_bitmap.h>
 #include <m_string.h>
 #include <my_bit.h>
-
-
-/* Create a mask of the significant bits for the last byte (1,3,7,..255) */
-
-static inline uchar last_byte_mask(uint bits)
-{
-  /* Get the number of used bits-1 (0..7) in the last byte */
-  unsigned int const used= (bits - 1U) & 7U;
-  /* Return bitmask for the significant bits */
-  return ((2U << used) - 1);
-}
 
 /*
   Create a mask with the upper 'unused' bits set and the lower 'used'

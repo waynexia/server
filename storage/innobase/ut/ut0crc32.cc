@@ -14,7 +14,7 @@ FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
 
 You should have received a copy of the GNU General Public License along with
 this program; if not, write to the Free Software Foundation, Inc.,
-51 Franklin Street, Suite 500, Boston, MA 02110-1335 USA
+51 Franklin Street, Fifth Floor, Boston, MA 02110-1335 USA
 
 *****************************************************************************/
 
@@ -60,7 +60,7 @@ mysys/my_perf.c, contributed by Facebook under the following license.
 
    You should have received a copy of the GNU General Public License along with
    this program; if not, write to the Free Software Foundation, Inc.,
-   51 Franklin Street, Suite 500, Boston, MA 02110-1335 USA */
+   51 Franklin Street, Fifth Floor, Boston, MA 02110-1335 USA */
 
 /* The below CRC32 implementation is based on the implementation included with
  * zlib with modifications to process 8 bytes at a time and using SSE 4.2
@@ -130,6 +130,28 @@ uint32_t ut_crc32_sw(const byte* buf, ulint len);
 ut_crc32_func_t	ut_crc32 = ut_crc32_sw;
 const char*	ut_crc32_implementation = "Using generic crc32 instructions";
 #endif
+
+#ifdef HAVE_ARMV8_CRC
+extern "C" {
+uint32_t crc32c_aarch64(uint32_t crc, const unsigned char *buffer, uint64_t len);
+};
+static inline
+uint32_t
+ut_crc32_armv8(
+        const byte*     buf,
+        ulint           len)
+{
+        return crc32c_aarch64(0, buf, len);
+}
+#endif
+
+/* For runtime check  */
+#if defined(__GNUC__) && defined(__linux__) && defined(HAVE_ARMV8_CRC)
+extern "C" {
+unsigned int crc32c_aarch64_available(void);
+};
+#endif
+
 
 #if (defined(__GNUC__) && defined(__x86_64__)) || defined(_MSC_VER)
 /********************************************************************//**
@@ -561,4 +583,14 @@ ut_crc32_init()
 		ut_crc32_implementation = "Using SSE2 crc32 instructions";
 	}
 #endif
+
+
+#if defined(__GNUC__) && defined(__linux__) && defined(HAVE_ARMV8_CRC)
+	if (crc32c_aarch64_available()) {
+		ut_crc32 = ut_crc32_armv8;
+		ut_crc32_implementation = "Using Armv8 crc32 instructions";
+
+	}
+#endif
+
 }

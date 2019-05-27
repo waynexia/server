@@ -12,7 +12,7 @@
 
    You should have received a copy of the GNU General Public License
    along with this program; if not, write to the Free Software
-   Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02111-1301 USA */
+   Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1335 USA */
 
 /**
   @file
@@ -594,7 +594,8 @@ int check_and_do_in_subquery_rewrites(JOIN *join)
   {
     Item_in_subselect *in_subs= NULL;
     Item_allany_subselect *allany_subs= NULL;
-    switch (subselect->substype()) {
+    Item_subselect::subs_type substype= subselect->substype();
+    switch (substype) {
     case Item_subselect::IN_SUBS:
       in_subs= (Item_in_subselect *)subselect;
       break;
@@ -606,6 +607,26 @@ int check_and_do_in_subquery_rewrites(JOIN *join)
       break;
     }
 
+    /*
+      Try removing "ORDER BY" or even "ORDER BY ... LIMIT" from certain kinds
+      of subqueries. The removal might enable further transformations.
+    */
+    if (substype == Item_subselect::IN_SUBS ||
+        substype == Item_subselect::EXISTS_SUBS ||
+        substype == Item_subselect::ANY_SUBS ||
+        substype == Item_subselect::ALL_SUBS)
+    {
+      // (1) - ORDER BY without LIMIT can be removed from IN/EXISTS subqueries
+      // (2) - for EXISTS, can also remove "ORDER BY ... LIMIT n",
+      //       but cannot remove "ORDER BY ... LIMIT n OFFSET m"
+      if (!select_lex->select_limit ||                               // (1)
+          (substype == Item_subselect::EXISTS_SUBS &&                // (2)
+           !select_lex->offset_limit))                               // (2)
+      {
+        select_lex->join->order= 0;
+        select_lex->join->skip_sort_order= 1;
+      }
+    }
 
     /* Resolve expressions and perform semantic analysis for IN query */
     if (in_subs != NULL)
@@ -4337,17 +4358,12 @@ SJ_TMP_TABLE::create_sj_weedout_tmp_table(THD *thd)
   table->temp_pool_slot = temp_pool_slot;
   table->copy_blobs= 1;
   table->in_use= thd;
-  table->quick_keys.init();
-  table->covering_keys.init();
-  table->keys_in_use_for_query.init();
 
   table->s= share;
   init_tmp_table_share(thd, share, "", 0, tmpname, tmpname);
   share->blob_field= blob_field;
   share->table_charset= NULL;
   share->primary_key= MAX_KEY;               // Indicate no primary key
-  share->keys_for_keyread.init();
-  share->keys_in_use.init();
 
   /* Create the field */
   {
@@ -4361,9 +4377,9 @@ SJ_TMP_TABLE::create_sj_weedout_tmp_table(THD *thd)
     if (!field)
       DBUG_RETURN(0);
     field->table= table;
-    field->key_start.init(0);
-    field->part_of_key.init(0);
-    field->part_of_sortkey.init(0);
+    field->key_start.clear_all();
+    field->part_of_key.clear_all();
+    field->part_of_sortkey.clear_all();
     field->unireg_check= Field::NONE;
     field->flags= (NOT_NULL_FLAG | BINARY_FLAG | NO_DEFAULT_VALUE_FLAG);
     field->reset_fields();
@@ -6743,8 +6759,7 @@ get_corresponding_item_for_in_subq_having(THD *thd, Item *in_item,
     Item_ref *ref=
       new (thd->mem_root) Item_ref(thd,
                                    &subq_pred->unit->first_select()->context,
-                                   NullS, NullS,
-                                   &new_item->name);
+                                   new_item->name);
     if (!ref)
       DBUG_ASSERT(0);
     return ref;

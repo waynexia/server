@@ -15,7 +15,7 @@
 
    You should have received a copy of the GNU General Public License
    along with this program; if not, write to the Free Software
-   Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA */
+   Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1335  USA */
 
 
 #ifdef USE_PRAGMA_INTERFACE
@@ -946,6 +946,11 @@ public:
 #endif
   }		/*lint -e1509 */
   void set_name(THD *thd, const char *str, size_t length, CHARSET_INFO *cs);
+  void set_name(THD *thd, const LEX_CSTRING &str,
+                CHARSET_INFO *cs= system_charset_info)
+  {
+    set_name(thd, str.str, str.length, cs);
+  }
   void set_name_no_truncate(THD *thd, const char *str, uint length,
                             CHARSET_INFO *cs);
   void init_make_send_field(Send_field *tmp_field, const Type_handler *h);
@@ -1247,12 +1252,14 @@ public:
   }
   longlong val_int_unsigned_typecast_from_int();
   longlong val_int_unsigned_typecast_from_str();
+  longlong val_int_unsigned_typecast_from_real();
 
   /**
     Get a value for CAST(x AS UNSIGNED).
     Huge positive unsigned values are converted to negative complements.
   */
   longlong val_int_signed_typecast_from_int();
+  longlong val_int_signed_typecast_from_real();
 
   /*
     This is just a shortcut to avoid the cast. You should still use
@@ -1499,7 +1506,6 @@ public:
 
   virtual Field *get_tmp_table_field() { return 0; }
   virtual Field *create_field_for_create_select(TABLE *table);
-  virtual Field *create_field_for_schema(THD *thd, TABLE *table);
   virtual const char *full_name() const { return name.str ? name.str : "???"; }
   const char *field_name_or_null()
   { return real_item()->type() == Item::FIELD_ITEM ? name.str : NULL; }
@@ -3181,14 +3187,14 @@ protected:
     updated during fix_fields() to values from Field object and life-time 
     of those is shorter than life-time of Item_field.
   */
-  const char *orig_db_name;
-  const char *orig_table_name;
+  LEX_CSTRING orig_db_name;
+  LEX_CSTRING orig_table_name;
   LEX_CSTRING orig_field_name;
 
 public:
   Name_resolution_context *context;
-  const char *db_name;
-  const char *table_name;
+  LEX_CSTRING db_name;
+  LEX_CSTRING table_name;
   LEX_CSTRING field_name;
   bool alias_name_used; /* true if item was resolved against alias */
   /* 
@@ -3218,10 +3224,10 @@ public:
   */
   bool can_be_depended;
   Item_ident(THD *thd, Name_resolution_context *context_arg,
-             const char *db_name_arg, const char *table_name_arg,
-             const LEX_CSTRING *field_name_arg);
+             const LEX_CSTRING &db_name_arg, const LEX_CSTRING &table_name_arg,
+             const LEX_CSTRING &field_name_arg);
   Item_ident(THD *thd, Item_ident *item);
-  Item_ident(THD *thd, TABLE_LIST *view_arg, const LEX_CSTRING *field_name_arg);
+  Item_ident(THD *thd, TABLE_LIST *view_arg, const LEX_CSTRING &field_name_arg);
   const char *full_name() const;
   void cleanup();
   st_select_lex *get_depended_from() const;
@@ -3256,8 +3262,15 @@ public:
   /* field need any privileges (for VIEW creation) */
   bool any_privileges;
   Item_field(THD *thd, Name_resolution_context *context_arg,
-             const char *db_arg,const char *table_name_arg,
-	     const LEX_CSTRING *field_name_arg);
+             const LEX_CSTRING &db_arg, const LEX_CSTRING &table_name_arg,
+	     const LEX_CSTRING &field_name_arg);
+  Item_field(THD *thd, Name_resolution_context *context_arg,
+             const LEX_CSTRING &field_name_arg)
+   :Item_field(thd, context_arg, null_clex_str, null_clex_str, field_name_arg)
+  { }
+  Item_field(THD *thd, Name_resolution_context *context_arg)
+   :Item_field(thd, context_arg, null_clex_str, null_clex_str, null_clex_str)
+  { }
   /*
     Constructor needed to process subselect with temporary tables (see Item)
   */
@@ -4255,7 +4268,7 @@ protected:
                                    const Metadata metadata)
   {
     fix_from_value(dv, metadata);
-    set_name(thd, str_value.ptr(), str_value.length(), str_value.charset());
+    set_name(thd, str_value.lex_cstring(), str_value.charset());
   }
 protected:
   /* Just create an item and do not fill string representation */
@@ -4302,21 +4315,21 @@ public:
     fix_and_set_name_from_value(thd, dv, Metadata(&str_value, repertoire));
   }
   // Constructors with an externally provided item name
-  Item_string(THD *thd, const char *name_par, const char *str, size_t length,
+  Item_string(THD *thd, const LEX_CSTRING &name_par, const LEX_CSTRING &str,
               CHARSET_INFO *cs, Derivation dv= DERIVATION_COERCIBLE)
    :Item_literal(thd)
   {
-    str_value.set_or_copy_aligned(str, length, cs);
+    str_value.set_or_copy_aligned(str.str, str.length, cs);
     fix_from_value(dv, Metadata(&str_value));
-    set_name(thd, name_par,safe_strlen(name_par), system_charset_info);
+    set_name(thd, name_par);
   }
-  Item_string(THD *thd, const char *name_par, const char *str, size_t length,
+  Item_string(THD *thd, const LEX_CSTRING &name_par, const LEX_CSTRING &str,
               CHARSET_INFO *cs, Derivation dv, uint repertoire)
    :Item_literal(thd)
   {
-    str_value.set_or_copy_aligned(str, length, cs);
+    str_value.set_or_copy_aligned(str.str, str.length, cs);
     fix_from_value(dv, Metadata(&str_value, repertoire));
-    set_name(thd, name_par, safe_strlen(name_par), system_charset_info);
+    set_name(thd, name_par);
   }
   void print_value(String *to) const
   {
@@ -4391,13 +4404,13 @@ public:
 class Item_string_with_introducer :public Item_string
 {
 public:
-  Item_string_with_introducer(THD *thd, const char *str, uint length,
+  Item_string_with_introducer(THD *thd, const LEX_CSTRING &str,
                               CHARSET_INFO *cs):
-    Item_string(thd, str, length, cs)
+    Item_string(thd, str.str, str.length, cs)
   { }
-  Item_string_with_introducer(THD *thd, const char *name_arg,
-                              const char *str, uint length, CHARSET_INFO *tocs):
-    Item_string(thd, name_arg, str, length, tocs)
+  Item_string_with_introducer(THD *thd, const LEX_CSTRING &name_arg,
+                              const LEX_CSTRING &str, CHARSET_INFO *tocs):
+    Item_string(thd, name_arg, str, tocs)
   { }
   virtual bool is_cs_specified() const
   {
@@ -4434,14 +4447,14 @@ public:
 
 class Item_static_string_func :public Item_string
 {
-  const char *func_name;
+  const LEX_CSTRING func_name;
 public:
-  Item_static_string_func(THD *thd, const char *name_par, const char *str,
-                          uint length, CHARSET_INFO *cs,
+  Item_static_string_func(THD *thd, const LEX_CSTRING &name_par,
+                          const LEX_CSTRING &str, CHARSET_INFO *cs,
                           Derivation dv= DERIVATION_COERCIBLE):
-    Item_string(thd, NullS, str, length, cs, dv), func_name(name_par)
+    Item_string(thd, LEX_CSTRING({NullS,0}), str, cs, dv), func_name(name_par)
   {}
-  Item_static_string_func(THD *thd, const char *name_par,
+  Item_static_string_func(THD *thd, const LEX_CSTRING &name_par,
                           const String *str,
                           CHARSET_INFO *tocs, uint *conv_errors,
                           Derivation dv, uint repertoire):
@@ -4450,7 +4463,7 @@ public:
   {}
   Item *safe_charset_converter(THD *thd, CHARSET_INFO *tocs)
   {
-    return const_charset_converter(thd, tocs, true, func_name);
+    return const_charset_converter(thd, tocs, true, func_name.str);
   }
 
   virtual inline void print(String *str, enum_query_type query_type)
@@ -4463,7 +4476,7 @@ public:
   bool check_vcol_func_processor(void *arg)
   { // VCOL_TIME_FUNC because the value is not constant, but does not
     // require fix_fields() to be re-run for every statement.
-    return mark_unsupported_function(func_name, arg, VCOL_TIME_FUNC);
+    return mark_unsupported_function(func_name.str, arg, VCOL_TIME_FUNC);
   }
 };
 
@@ -4472,53 +4485,16 @@ public:
 class Item_partition_func_safe_string: public Item_string
 {
 public:
-  Item_partition_func_safe_string(THD *thd, const char *name_arg, uint length,
-                                  CHARSET_INFO *cs= NULL):
-    Item_string(thd, name_arg, length, cs)
-  {}
+  Item_partition_func_safe_string(THD *thd, const LEX_CSTRING &name_arg,
+                                  uint length, CHARSET_INFO *cs):
+    Item_string(thd, name_arg, LEX_CSTRING({0,0}), cs)
+  {
+    max_length= length;
+  }
   bool check_vcol_func_processor(void *arg) 
   {
     return mark_unsupported_function("safe_string", arg, VCOL_IMPOSSIBLE);
   }
-};
-
-
-class Item_return_date_time :public Item_partition_func_safe_string
-{
-  enum_field_types date_time_field_type;
-public:
-  Item_return_date_time(THD *thd, const char *name_arg, uint length_arg,
-                        enum_field_types field_type_arg, uint dec_arg= 0):
-    Item_partition_func_safe_string(thd, name_arg, length_arg, &my_charset_bin),
-    date_time_field_type(field_type_arg)
-  { decimals= dec_arg; }
-  const Type_handler *type_handler() const
-  {
-    return Type_handler::get_handler_by_field_type(date_time_field_type);
-  }
-};
-
-
-class Item_blob :public Item_partition_func_safe_string
-{
-public:
-  Item_blob(THD *thd, const char *name_arg, uint length):
-    Item_partition_func_safe_string(thd, name_arg, (uint) safe_strlen(name_arg),
-                                    &my_charset_bin)
-  { max_length= length; }
-  enum Type type() const { return TYPE_HOLDER; }
-  const Type_handler *type_handler() const
-  {
-    return Type_handler::blob_type_handler(max_length);
-  }
-  const Type_handler *real_type_handler() const
-  {
-    // Should not be called, Item_blob is used for SHOW purposes only.
-    DBUG_ASSERT(0);
-    return &type_handler_varchar;
-  }
-  Field *create_field_for_schema(THD *thd, TABLE *table)
-  { return tmp_table_field_from_field_type(table); }
 };
 
 
@@ -4531,15 +4507,15 @@ public:
 class Item_empty_string :public Item_partition_func_safe_string
 {
 public:
-  Item_empty_string(THD *thd, const char *header,uint length,
-                    CHARSET_INFO *cs= NULL):
-    Item_partition_func_safe_string(thd, "", 0,
-                                    cs ? cs : &my_charset_utf8_general_ci)
-    {
-      name.str=    header;
-      name.length= strlen(name.str);
-      max_length= length * collation.collation->mbmaxlen;
-    }
+  Item_empty_string(THD *thd, const LEX_CSTRING &header, uint length,
+                    CHARSET_INFO *cs= &my_charset_utf8_general_ci)
+   :Item_partition_func_safe_string(thd, header, length * cs->mbmaxlen, cs)
+  { }
+  Item_empty_string(THD *thd, const char *header, uint length,
+                    CHARSET_INFO *cs= &my_charset_utf8_general_ci)
+   :Item_partition_func_safe_string(thd, LEX_CSTRING({header, strlen(header)}),
+                                    length * cs->mbmaxlen, cs)
+  { }
   void make_send_field(THD *thd, Send_field *field);
 };
 
@@ -5129,10 +5105,14 @@ public:
   Item **ref;
   bool reference_trough_name;
   Item_ref(THD *thd, Name_resolution_context *context_arg,
-           const char *db_arg, const char *table_name_arg,
-           const LEX_CSTRING *field_name_arg):
+           const LEX_CSTRING &db_arg, const LEX_CSTRING &table_name_arg,
+           const LEX_CSTRING &field_name_arg):
     Item_ident(thd, context_arg, db_arg, table_name_arg, field_name_arg),
     set_properties_only(0), ref(0), reference_trough_name(1) {}
+  Item_ref(THD *thd, Name_resolution_context *context_arg,
+           const LEX_CSTRING &field_name_arg)
+   :Item_ref(thd, context_arg, null_clex_str, null_clex_str, field_name_arg)
+  { }
   /*
     This constructor is used in two scenarios:
     A) *item = NULL
@@ -5148,10 +5128,10 @@ public:
          with Bar, and if we have a more broader set of problems like this.
   */
   Item_ref(THD *thd, Name_resolution_context *context_arg, Item **item,
-           const char *table_name_arg, const LEX_CSTRING *field_name_arg,
+           const LEX_CSTRING &table_name_arg, const LEX_CSTRING &field_name_arg,
            bool alias_name_used_arg= FALSE);
   Item_ref(THD *thd, TABLE_LIST *view_arg, Item **item,
-           const LEX_CSTRING *field_name_arg, bool alias_name_used_arg= FALSE);
+           const LEX_CSTRING &field_name_arg, bool alias_name_used_arg= FALSE);
 
   /* Constructor need to process subselect with temporary tables (see Item) */
   Item_ref(THD *thd, Item_ref *item)
@@ -5366,8 +5346,8 @@ class Item_direct_ref :public Item_ref
 {
 public:
   Item_direct_ref(THD *thd, Name_resolution_context *context_arg, Item **item,
-                  const char *table_name_arg,
-                  const LEX_CSTRING *field_name_arg,
+                  const LEX_CSTRING &table_name_arg,
+                  const LEX_CSTRING &field_name_arg,
                   bool alias_name_used_arg= FALSE):
     Item_ref(thd, context_arg, item, table_name_arg,
              field_name_arg, alias_name_used_arg)
@@ -5375,7 +5355,7 @@ public:
   /* Constructor need to process subselect with temporary tables (see Item) */
   Item_direct_ref(THD *thd, Item_direct_ref *item) : Item_ref(thd, item) {}
   Item_direct_ref(THD *thd, TABLE_LIST *view_arg, Item **item,
-                  const LEX_CSTRING *field_name_arg,
+                  const LEX_CSTRING &field_name_arg,
                   bool alias_name_used_arg= FALSE):
     Item_ref(thd, view_arg, item, field_name_arg,
              alias_name_used_arg)
@@ -5415,7 +5395,7 @@ class Item_direct_ref_to_ident :public Item_direct_ref
 public:
   Item_direct_ref_to_ident(THD *thd, Item_ident *item):
     Item_direct_ref(thd, item->context, (Item**)&item, item->table_name,
-                    &item->field_name, FALSE)
+                    item->field_name, FALSE)
   {
     ident= item;
     ref= (Item**)&ident;
@@ -5607,8 +5587,8 @@ class Item_direct_view_ref :public Item_direct_ref
 public:
   Item_direct_view_ref(THD *thd, Name_resolution_context *context_arg,
                        Item **item,
-                       const char *table_name_arg,
-                       LEX_CSTRING *field_name_arg,
+                       LEX_CSTRING &table_name_arg,
+                       LEX_CSTRING &field_name_arg,
                        TABLE_LIST *view_arg):
     Item_direct_ref(thd, context_arg, item, table_name_arg, field_name_arg),
     item_equal(0), view(view_arg),
@@ -5780,7 +5760,7 @@ public:
   Item_outer_ref(THD *thd, Name_resolution_context *context_arg,
                  Item_field *outer_field_arg):
     Item_direct_ref(thd, context_arg, 0, outer_field_arg->table_name,
-                    &outer_field_arg->field_name),
+                    outer_field_arg->field_name),
     outer_ref(outer_field_arg), in_sum_func(0),
     found_in_select_list(0), found_in_group_by(0)
   {
@@ -5789,7 +5769,7 @@ public:
     fixed= 0;                     /* reset flag set in set_properties() */
   }
   Item_outer_ref(THD *thd, Name_resolution_context *context_arg, Item **item,
-                 const char *table_name_arg, LEX_CSTRING *field_name_arg,
+                 const LEX_CSTRING &table_name_arg, LEX_CSTRING &field_name_arg,
                  bool alias_name_used_arg):
     Item_direct_ref(thd, context_arg, item, table_name_arg, field_name_arg,
                     alias_name_used_arg),
@@ -5830,8 +5810,8 @@ protected:
 public:
   Item_ref_null_helper(THD *thd, Name_resolution_context *context_arg,
                        Item_in_subselect* master, Item **item,
-		       const char *table_name_arg,
-                       const LEX_CSTRING *field_name_arg):
+		       const LEX_CSTRING &table_name_arg,
+                       const LEX_CSTRING &field_name_arg):
     Item_ref(thd, context_arg, item, table_name_arg, field_name_arg),
     owner(master) {}
   void save_val(Field *to);
@@ -6199,16 +6179,13 @@ class Item_default_value : public Item_field
 public:
   Item *arg;
   Item_default_value(THD *thd, Name_resolution_context *context_arg)
-    :Item_field(thd, context_arg, (const char *)NULL, (const char *)NULL,
-                &null_clex_str),
+    :Item_field(thd, context_arg),
      arg(NULL) {}
   Item_default_value(THD *thd, Name_resolution_context *context_arg, Item *a)
-    :Item_field(thd, context_arg, (const char *)NULL, (const char *)NULL,
-                &null_clex_str),
+    :Item_field(thd, context_arg),
      arg(a) {}
   Item_default_value(THD *thd, Name_resolution_context *context_arg, Field *a)
-    :Item_field(thd, context_arg, (const char *)NULL, (const char *)NULL,
-                &null_clex_str),
+    :Item_field(thd, context_arg),
      arg(NULL) {}
   enum Type type() const { return DEFAULT_VALUE_ITEM; }
   bool eq(const Item *item, bool binary_cmp) const;
@@ -6295,8 +6272,7 @@ class Item_insert_value : public Item_field
 public:
   Item *arg;
   Item_insert_value(THD *thd, Name_resolution_context *context_arg, Item *a)
-    :Item_field(thd, context_arg, (const char *)NULL, (const char *)NULL,
-                &null_clex_str),
+    :Item_field(thd, context_arg),
      arg(a) {}
   bool eq(const Item *item, bool binary_cmp) const;
   bool fix_fields(THD *, Item **);
@@ -6357,10 +6333,9 @@ public:
 
   Item_trigger_field(THD *thd, Name_resolution_context *context_arg,
                      row_version_type row_ver_arg,
-                     const LEX_CSTRING *field_name_arg,
+                     const LEX_CSTRING &field_name_arg,
                      ulong priv, const bool ro)
-    :Item_field(thd, context_arg,
-               (const char *)NULL, (const char *)NULL, field_name_arg),
+    :Item_field(thd, context_arg, field_name_arg),
      row_version(row_ver_arg), field_idx((uint)-1), original_privilege(priv),
      want_privilege(priv), table_grants(NULL), read_only (ro)
   {}
@@ -6780,21 +6755,44 @@ public:
 
 class Item_cache_real: public Item_cache
 {
+protected:
   double value;
 public:
-  Item_cache_real(THD *thd): Item_cache(thd, &type_handler_double),
-    value(0) {}
-
+  Item_cache_real(THD *thd, const Type_handler *h)
+   :Item_cache(thd, h),
+    value(0)
+  {}
   double val_real();
   longlong val_int();
-  String* val_str(String *str);
   my_decimal *val_decimal(my_decimal *);
   bool get_date(THD *thd, MYSQL_TIME *ltime, date_mode_t fuzzydate)
   { return get_date_from_real(thd, ltime, fuzzydate); }
   bool cache_value();
   Item *convert_to_basic_const_item(THD *thd);
+};
+
+
+class Item_cache_double: public Item_cache_real
+{
+public:
+  Item_cache_double(THD *thd)
+   :Item_cache_real(thd, &type_handler_double)
+  { }
+  String* val_str(String *str);
   Item *get_copy(THD *thd)
-  { return get_item_copy<Item_cache_real>(thd, this); }
+  { return get_item_copy<Item_cache_double>(thd, this); }
+};
+
+
+class Item_cache_float: public Item_cache_real
+{
+public:
+  Item_cache_float(THD *thd)
+   :Item_cache_real(thd, &type_handler_float)
+  { }
+  String* val_str(String *str);
+  Item *get_copy(THD *thd)
+  { return get_item_copy<Item_cache_float>(thd, this); }
 };
 
 

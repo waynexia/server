@@ -29,7 +29,7 @@ FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
 
 You should have received a copy of the GNU General Public License along with
 this program; if not, write to the Free Software Foundation, Inc.,
-51 Franklin Street, Suite 500, Boston, MA 02110-1335 USA
+51 Franklin Street, Fifth Floor, Boston, MA 02110-1335 USA
 
 *****************************************************************************/
 
@@ -200,8 +200,6 @@ static char*	innobase_server_stopword_table;
 values */
 
 static my_bool	innobase_use_atomic_writes;
-static my_bool	innobase_use_checksums;
-static my_bool	innobase_locks_unsafe_for_binlog;
 static my_bool	innobase_rollback_on_timeout;
 static my_bool	innobase_create_status_file;
 my_bool	innobase_stats_on_metadata;
@@ -1056,8 +1054,7 @@ static SHOW_VAR innodb_status_variables[]= {
   (char*) &export_vars.innodb_num_open_files,		  SHOW_LONG},
   {"truncated_status_writes",
   (char*) &export_vars.innodb_truncated_status_writes,	  SHOW_LONG},
-  {"available_undo_logs",
-  (char*) &export_vars.innodb_available_undo_logs,        SHOW_LONG},
+  {"available_undo_logs", &srv_available_undo_logs, SHOW_ULONG},
   {"undo_truncations",
   (char*) &export_vars.innodb_undo_truncations,           SHOW_LONG},
 
@@ -1828,7 +1825,7 @@ thd_innodb_tmpdir(
 @return reference to transaction pointer */
 static trx_t* thd_to_trx(THD* thd)
 {
-	return *reinterpret_cast<trx_t**>(thd_ha_data(thd, innodb_hton_ptr));
+	return reinterpret_cast<trx_t*>(thd_get_ha_data(thd, innodb_hton_ptr));
 }
 
 #ifdef WITH_WSREP
@@ -2346,96 +2343,6 @@ static bool is_mysql_datadir_path(const char *path)
                                             (uchar *) mysql_data_dir,
                                             mysql_data_home_len,
                                             TRUE));
-}
-
-static int mysql_tmpfile_path(const char *path, const char *prefix)
-{
-  DBUG_ASSERT(path != NULL);
-  DBUG_ASSERT((strlen(path) + strlen(prefix)) <= FN_REFLEN);
-
-  char filename[FN_REFLEN];
-  File fd = create_temp_file(filename, path, prefix, O_BINARY | O_SEQUENTIAL,
-                             MYF(MY_WME | MY_TEMPORARY));
-  return fd;
-}
-
-/** Creates a temporary file in the location specified by the parameter
-path. If the path is NULL, then it will be created in tmpdir.
-@param[in]	path	location for creating temporary file
-@return temporary file descriptor, or < 0 on error */
-os_file_t
-innobase_mysql_tmpfile(
-	const char*	path)
-{
-#ifdef WITH_INNODB_DISALLOW_WRITES
-	os_event_wait(srv_allow_writes_event);
-#endif /* WITH_INNODB_DISALLOW_WRITES */
-	File	fd;
-
-	DBUG_EXECUTE_IF(
-		"innobase_tmpfile_creation_failure",
-		return(OS_FILE_CLOSED);
-	);
-
-	if (path == NULL) {
-		fd = mysql_tmpfile("ib");
-	} else {
-		fd = mysql_tmpfile_path(path, "ib");
-	}
-
-	if (fd < 0)
-		return OS_FILE_CLOSED;
-
-	/* Copy the file descriptor, so that the additional resources
-	allocated by create_temp_file() can be freed by invoking
-	my_close().
-
-	Because the file descriptor returned by this function
-	will be passed to fdopen(), it will be closed by invoking
-	fclose(), which in turn will invoke close() instead of
-	my_close(). */
-
-#ifdef _WIN32
-	/* Note that on Windows, the integer returned by mysql_tmpfile
-	has no relation to C runtime file descriptor. Here, we need
-	to call my_get_osfhandle to get the HANDLE and then convert it
-	to C runtime filedescriptor. */
-
-	HANDLE hFile = my_get_osfhandle(fd);
-	HANDLE hDup;
-	BOOL bOK = DuplicateHandle(
-			GetCurrentProcess(),
-			hFile, GetCurrentProcess(),
-			&hDup, 0, FALSE, DUPLICATE_SAME_ACCESS);
-	my_close(fd, MYF(MY_WME));
-
-	if (!bOK) {
-		my_osmaperr(GetLastError());
-		goto error;
-	}
-	return hDup;
-#else
-#ifdef F_DUPFD_CLOEXEC
-	int fd2 = fcntl(fd, F_DUPFD_CLOEXEC, 0);
-#else
-	int fd2 = dup(fd);
-#endif
-	my_close(fd, MYF(MY_WME));
-	if (fd2 < 0) {
-		set_my_errno(errno);
-		goto error;
-	}
-	return fd2;
-#endif
-
-error:
-	char errbuf[MYSYS_STRERROR_SIZE];
-
-	my_error(EE_OUT_OF_FILERESOURCES,
-		MYF(0),
-		"ib*", errno,
-		my_strerror(errbuf, sizeof(errbuf), errno));
-	return (OS_FILE_CLOSED);
 }
 
 /*********************************************************************//**
@@ -3556,46 +3463,6 @@ static int innodb_init_abort()
 	DBUG_RETURN(1);
 }
 
-/** Update log_checksum_algorithm_ptr with a pointer to the function
-corresponding to whether checksums are enabled.
-@param[in,out]	thd	client session, or NULL if at startup
-@param[in]	check	whether redo log block checksums are enabled
-@return whether redo log block checksums are enabled */
-static inline
-bool
-innodb_log_checksums_func_update(THD* thd, bool check)
-{
-	static const char msg[] = "innodb_encrypt_log implies"
-		" innodb_log_checksums";
-
-	ut_ad(!thd == !srv_was_started);
-
-	if (!check) {
-		check = srv_encrypt_log;
-		if (!check) {
-		} else if (thd) {
-			push_warning_printf(thd, Sql_condition::WARN_LEVEL_WARN,
-					    HA_ERR_UNSUPPORTED, msg);
-		} else {
-			sql_print_warning(msg);
-		}
-	}
-
-	if (thd) {
-		log_mutex_enter();
-		log_checksum_algorithm_ptr = check
-			? log_block_calc_checksum_crc32
-			: log_block_calc_checksum_none;
-		log_mutex_exit();
-	} else {
-		log_checksum_algorithm_ptr = check
-			? log_block_calc_checksum_crc32
-			: log_block_calc_checksum_none;
-	}
-
-	return(check);
-}
-
 /****************************************************************//**
 Gives the file extension of an InnoDB single-table tablespace. */
 static const char* ha_innobase_exts[] = {
@@ -3692,6 +3559,17 @@ static void innodb_buffer_pool_size_init()
 	srv_buf_pool_size = buf_pool_size_align(srv_buf_pool_size);
 	innobase_buffer_pool_size = srv_buf_pool_size;
 }
+
+/** Deprecated parameter with no effect */
+static my_bool innodb_log_checksums;
+/** Deprecation message for innodb_log_checksums */
+static const char* innodb_log_checksums_deprecated
+= "The parameter innodb_log_checksums is deprecated and has no effect.";
+/** Deprecated parameter with no effect */
+static ulong innodb_undo_logs;
+/** Deprecation message for innodb_undo_logs */
+static const char* innodb_undo_logs_deprecated
+= "The parameter innodb_undo_logs is deprecated and has no effect.";
 
 /** Initialize, validate and normalize the InnoDB startup parameters.
 @return failure code
@@ -4007,25 +3885,17 @@ static int innodb_init_params()
 
 	srv_buf_pool_size = ulint(innobase_buffer_pool_size);
 
-	if (!innobase_use_checksums) {
-		ib::warn() << "Setting innodb_checksums to OFF is DEPRECATED."
-			" This option may be removed in future releases. You"
-			" should set innodb_checksum_algorithm=NONE instead.";
-		srv_checksum_algorithm = SRV_CHECKSUM_ALGORITHM_NONE;
+	if (UNIV_UNLIKELY(!innodb_log_checksums)) {
+		sql_print_warning(innodb_log_checksums_deprecated);
+		innodb_log_checksums = TRUE;
 	}
 
-	innodb_log_checksums = innodb_log_checksums_func_update(
-		NULL, innodb_log_checksums);
+	if (UNIV_UNLIKELY(innodb_undo_logs != TRX_SYS_N_RSEGS)) {
+		sql_print_warning(innodb_undo_logs_deprecated);
+		innodb_undo_logs = TRX_SYS_N_RSEGS;
+	}
 
 	row_rollback_on_timeout = (ibool) innobase_rollback_on_timeout;
-
-	srv_locks_unsafe_for_binlog = (ibool) innobase_locks_unsafe_for_binlog;
-	if (innobase_locks_unsafe_for_binlog) {
-		ib::warn() << "Using innodb_locks_unsafe_for_binlog is"
-			" DEPRECATED. This option may be removed in future"
-			" releases. Please use READ COMMITTED transaction"
-			" isolation level instead; " << SET_TRANSACTION_MSG;
-	}
 
 	if (innobase_open_files < 10) {
 		innobase_open_files = 300;
@@ -5809,12 +5679,12 @@ innobase_build_v_templ(
 	ut_ad(n_v_col > 0);
 
 	if (!locked) {
-		mutex_enter(&dict_sys->mutex);
+		mutex_enter(&dict_sys.mutex);
 	}
 
 	if (s_templ->vtempl) {
 		if (!locked) {
-			mutex_exit(&dict_sys->mutex);
+			mutex_exit(&dict_sys.mutex);
 		}
 		return;
 	}
@@ -5921,7 +5791,7 @@ innobase_build_v_templ(
 	}
 
 	if (!locked) {
-		mutex_exit(&dict_sys->mutex);
+		mutex_exit(&dict_sys.mutex);
 	}
 
 	s_templ->db_name = table->s->db.str;
@@ -6238,7 +6108,7 @@ no_such_table:
 	key_used_on_scan = m_primary_key;
 
 	if (ib_table->n_v_cols) {
-		mutex_enter(&dict_sys->mutex);
+		mutex_enter(&dict_sys.mutex);
 		if (ib_table->vc_templ == NULL) {
 			ib_table->vc_templ = UT_NEW_NOKEY(dict_vcol_templ_t());
 		} else if (ib_table->get_ref_count() == 1) {
@@ -6254,7 +6124,7 @@ no_such_table:
 				true);
 		}
 
-		mutex_exit(&dict_sys->mutex);
+		mutex_exit(&dict_sys.mutex);
 	}
 
 	if (!check_index_consistency(table, ib_table)) {
@@ -9051,7 +8921,7 @@ ha_innobase::delete_all_rows()
 /**********************************************************************//**
 Removes a new lock set on a row, if it was not read optimistically. This can
 be called after a row has been read in the processing of an UPDATE or a DELETE
-query, if the option innodb_locks_unsafe_for_binlog is set. */
+query. */
 
 void
 ha_innobase::unlock_row(void)
@@ -9067,11 +8937,8 @@ ha_innobase::unlock_row(void)
 
 	switch (m_prebuilt->row_read_type) {
 	case ROW_READ_WITH_LOCKS:
-		if (!srv_locks_unsafe_for_binlog
-		    && m_prebuilt->trx->isolation_level
-		    > TRX_ISO_READ_COMMITTED) {
+		if (m_prebuilt->trx->isolation_level > TRX_ISO_READ_COMMITTED)
 			break;
-		}
 		/* fall through */
 	case ROW_READ_TRY_SEMI_CONSISTENT:
 		row_unlock_for_mysql(m_prebuilt, FALSE);
@@ -9094,28 +8961,16 @@ ha_innobase::was_semi_consistent_read(void)
 }
 
 /* See handler.h and row0mysql.h for docs on this function. */
-
-void
-ha_innobase::try_semi_consistent_read(bool yes)
-/*===========================================*/
+void ha_innobase::try_semi_consistent_read(bool yes)
 {
-	ut_a(m_prebuilt->trx == thd_to_trx(ha_thd()));
-
+	ut_ad(m_prebuilt->trx == thd_to_trx(ha_thd()));
 	/* Row read type is set to semi consistent read if this was
-	requested by the MySQL and either innodb_locks_unsafe_for_binlog
-	option is used or this session is using READ COMMITTED isolation
-	level. */
-
-	if (yes
-	    && (srv_locks_unsafe_for_binlog
-		|| m_prebuilt->trx->isolation_level
-		<= TRX_ISO_READ_COMMITTED)) {
-
-		m_prebuilt->row_read_type = ROW_READ_TRY_SEMI_CONSISTENT;
-
-	} else {
-		m_prebuilt->row_read_type = ROW_READ_WITH_LOCKS;
-	}
+	requested by the SQL layer and the transaction isolation level is
+	READ UNCOMMITTED or READ COMMITTED. */
+	m_prebuilt->row_read_type = yes
+		&& m_prebuilt->trx->isolation_level <= TRX_ISO_READ_COMMITTED
+		? ROW_READ_TRY_SEMI_CONSISTENT
+		: ROW_READ_WITH_LOCKS;
 }
 
 /******************************************************************//**
@@ -10264,7 +10119,7 @@ wsrep_append_foreign_key(
 		foreign->referenced_table : foreign->foreign_table)) {
 		WSREP_DEBUG("pulling %s table into cache",
 			    (referenced) ? "referenced" : "foreign");
-		mutex_enter(&(dict_sys->mutex));
+		mutex_enter(&dict_sys.mutex);
 
 		if (referenced) {
 			foreign->referenced_table =
@@ -10294,7 +10149,7 @@ wsrep_append_foreign_key(
 						TRUE, FALSE);
 			}
 		}
-		mutex_exit(&(dict_sys->mutex));
+		mutex_exit(&dict_sys.mutex);
 	}
 
 	if ( !((referenced) ?
@@ -11148,7 +11003,7 @@ err_col:
 
 	if (table->is_temporary()) {
 		m_trx->table_id = table->id
-			= dict_sys->get_temporary_table_id();
+			= dict_sys.get_temporary_table_id();
 		ut_ad(dict_tf_get_rec_format(table->flags)
 		      != REC_FORMAT_COMPRESSED);
 		table->space_id = SRV_TMP_SPACE_ID;
@@ -12575,9 +12430,9 @@ create_table_info_t::create_table_update_dict()
 			DBUG_RETURN(-1);
 		}
 
-		mutex_enter(&dict_sys->mutex);
+		mutex_enter(&dict_sys.mutex);
 		fts_optimize_add_table(innobase_table);
-		mutex_exit(&dict_sys->mutex);
+		mutex_exit(&dict_sys.mutex);
 	}
 
 	if (const Field* ai = m_form->found_next_number_field) {
@@ -12846,12 +12701,12 @@ ha_innobase::discard_or_import_tablespace(
 	btr_cur_instant_init(). */
 	table_id_t id = m_prebuilt->table->id;
 	ut_ad(id);
-	mutex_enter(&dict_sys->mutex);
+	mutex_enter(&dict_sys.mutex);
 	dict_table_close(m_prebuilt->table, TRUE, FALSE);
-	dict_table_remove_from_cache(m_prebuilt->table);
+	dict_sys.remove(m_prebuilt->table);
 	m_prebuilt->table = dict_table_open_on_id(id, TRUE,
 						  DICT_TABLE_OP_NORMAL);
-	mutex_exit(&dict_sys->mutex);
+	mutex_exit(&dict_sys.mutex);
 	if (!m_prebuilt->table) {
 		err = DB_TABLE_NOT_FOUND;
 	} else {
@@ -12913,8 +12768,7 @@ inline int ha_innobase::delete_table(const char* name, enum_sql_command sqlcom)
 	extension, in contrast to ::create */
 	normalize_table_name(norm_name, name);
 
-	if (srv_read_only_mode
-	    || srv_force_recovery >= SRV_FORCE_NO_UNDO_LOG_SCAN) {
+	if (high_level_read_only) {
 		DBUG_RETURN(HA_ERR_TABLE_READONLY);
 	}
 
@@ -13858,7 +13712,7 @@ innodb_rec_per_key(
 		}
 
 		/* If the number of NULL values is the same as or
-		large than that of the distinct values, we could
+		larger than that of the distinct values, we could
 		consider that the table consists mostly of NULL value.
 		Set rec_per_key to 1. */
 		if (n_diff <= n_null) {
@@ -13982,7 +13836,7 @@ ha_innobase::info_low(
 				opt = DICT_STATS_RECALC_TRANSIENT;
 			}
 
-			ut_ad(!mutex_own(&dict_sys->mutex));
+			ut_ad(!mutex_own(&dict_sys.mutex));
 			ret = dict_stats_update(ib_table, opt);
 
 			if (ret != DB_SUCCESS) {
@@ -14836,6 +14690,10 @@ get_foreign_key_info(
 	LEX_CSTRING*		referenced_key_name;
 	LEX_CSTRING*		name = NULL;
 
+	if (dict_table_t::is_temporary_name(foreign->foreign_table_name)) {
+		return NULL;
+	}
+
 	ptr = dict_remove_db_name(foreign->id);
 	f_key_info.foreign_id = thd_make_lex_string(
 		thd, 0, ptr, strlen(ptr), 1);
@@ -14911,7 +14769,7 @@ get_foreign_key_info(
 
 		dict_table_t*	ref_table;
 
-		ut_ad(mutex_own(&dict_sys->mutex));
+		ut_ad(mutex_own(&dict_sys.mutex));
 		ref_table = dict_table_open_on_name(
 			foreign->referenced_table_name_lookup,
 			TRUE, FALSE, DICT_ERR_IGNORE_NONE);
@@ -14966,7 +14824,7 @@ ha_innobase::get_foreign_key_list(
 
 	m_prebuilt->trx->op_info = "getting list of foreign keys";
 
-	mutex_enter(&dict_sys->mutex);
+	mutex_enter(&dict_sys.mutex);
 
 	for (dict_foreign_set::iterator it
 		= m_prebuilt->table->foreign_set.begin();
@@ -14983,7 +14841,7 @@ ha_innobase::get_foreign_key_list(
 		}
 	}
 
-	mutex_exit(&dict_sys->mutex);
+	mutex_exit(&dict_sys.mutex);
 
 	m_prebuilt->trx->op_info = "";
 
@@ -15004,7 +14862,7 @@ ha_innobase::get_parent_foreign_key_list(
 
 	m_prebuilt->trx->op_info = "getting list of referencing foreign keys";
 
-	mutex_enter(&dict_sys->mutex);
+	mutex_enter(&dict_sys.mutex);
 
 	for (dict_foreign_set::iterator it
 		= m_prebuilt->table->referenced_set.begin();
@@ -15021,7 +14879,7 @@ ha_innobase::get_parent_foreign_key_list(
 		}
 	}
 
-	mutex_exit(&dict_sys->mutex);
+	mutex_exit(&dict_sys.mutex);
 
 	m_prebuilt->trx->op_info = "";
 
@@ -15107,7 +14965,7 @@ ha_innobase::get_cascade_foreign_key_table_list(
 
 	cascade_fk_set	fk_set;
 
-	mutex_enter(&dict_sys->mutex);
+	mutex_enter(&dict_sys.mutex);
 
 	/* Initialize the table_list with prebuilt->table name. */
 	struct table_list_item	item = {m_prebuilt->table,
@@ -15186,7 +15044,7 @@ ha_innobase::get_cascade_foreign_key_table_list(
 
 	} while(!table_list.empty());
 
-	mutex_exit(&dict_sys->mutex);
+	mutex_exit(&dict_sys.mutex);
 
 	m_prebuilt->trx->op_info = "";
 
@@ -16387,9 +16245,7 @@ ha_innobase::store_lock(
 		if (sql_command == SQLCOM_CHECKSUM
 		    || sql_command == SQLCOM_CREATE_SEQUENCE
 		    || (sql_command == SQLCOM_ANALYZE && lock_type == TL_READ)
-		    || ((srv_locks_unsafe_for_binlog
-			|| trx->isolation_level <= TRX_ISO_READ_COMMITTED)
-			&& trx->isolation_level != TRX_ISO_SERIALIZABLE
+		    || (trx->isolation_level <= TRX_ISO_READ_COMMITTED
 			&& (lock_type == TL_READ
 			    || lock_type == TL_READ_NO_INSERT)
 			&& (sql_command == SQLCOM_INSERT_SELECT
@@ -16398,10 +16254,8 @@ ha_innobase::store_lock(
 			    || sql_command == SQLCOM_CREATE_SEQUENCE
 			    || sql_command == SQLCOM_CREATE_TABLE))) {
 
-			/* If we either have innobase_locks_unsafe_for_binlog
-			option set or this session is using READ COMMITTED
-			isolation level and isolation level of the transaction
-			is not set to serializable and MySQL is doing
+			/* If the transaction isolation level is
+			READ UNCOMMITTED or READ COMMITTED and we are executing
 			INSERT INTO...SELECT or REPLACE INTO...SELECT
 			or UPDATE ... = (SELECT ...) or CREATE  ...
 			SELECT... without FOR UPDATE or IN SHARE
@@ -17338,86 +17192,36 @@ innodb_buffer_pool_size_update(THD*,st_mysql_sys_var*,void*, const void* save)
 		<< " (new size: " << in_val << " bytes)";
 }
 
-/*************************************************************//**
-Check whether valid argument given to "innodb_fts_internal_tbl_name"
-This function is registered as a callback with MySQL.
-@return 0 for valid stopword table */
-static
-int
-innodb_internal_table_validate(
-/*===========================*/
-	THD*, st_mysql_sys_var*,
-	void*				save,	/*!< out: immediate result
-						for update function */
-	struct st_mysql_value*		value)	/*!< in: incoming string */
+/** The latest assigned innodb_ft_aux_table name */
+static char* innodb_ft_aux_table;
+
+/** Update innodb_ft_aux_table_id on SET GLOBAL innodb_ft_aux_table.
+@param[out]	save	new value of innodb_ft_aux_table
+@param[in]	value	user-specified value */
+static int innodb_ft_aux_table_validate(THD*, st_mysql_sys_var*,
+					void* save, st_mysql_value* value)
 {
-	const char*	table_name;
-	char		buff[STRING_BUFFER_USUAL_SIZE];
-	int		len = sizeof(buff);
-	int		ret = 1;
-	dict_table_t*	user_table;
+	char buf[STRING_BUFFER_USUAL_SIZE];
+	int len = sizeof buf;
 
-	ut_a(save != NULL);
-	ut_a(value != NULL);
-
-	table_name = value->val_str(value, buff, &len);
-
-	if (!table_name) {
-		*static_cast<const char**>(save) = NULL;
-		return(0);
-	}
-
-	user_table = dict_table_open_on_name(
-		table_name, FALSE, TRUE, DICT_ERR_IGNORE_NONE);
-
-	if (user_table) {
-		if (dict_table_has_fts_index(user_table)) {
-			*static_cast<const char**>(save) = table_name;
-			ret = 0;
+	if (const char* table_name = value->val_str(value, buf, &len)) {
+		if (dict_table_t* table = dict_table_open_on_name(
+			    table_name, FALSE, TRUE, DICT_ERR_IGNORE_NONE)) {
+			const table_id_t id = dict_table_has_fts_index(table)
+				? table->id : 0;
+			dict_table_close(table, FALSE, FALSE);
+			if (id) {
+				innodb_ft_aux_table_id = id;
+				*static_cast<const char**>(save) = table_name;
+				return 0;
+			}
 		}
 
-		dict_table_close(user_table, FALSE, TRUE);
-
-		DBUG_EXECUTE_IF("innodb_evict_autoinc_table",
-			mutex_enter(&dict_sys->mutex);
-			dict_table_remove_from_cache(user_table, true);
-			mutex_exit(&dict_sys->mutex);
-		);
-	}
-
-	return(ret);
-}
-
-/****************************************************************//**
-Update global variable "fts_internal_tbl_name" with the "saved"
-stopword table name value. This function is registered as a callback
-with MySQL. */
-static
-void
-innodb_internal_table_update(
-/*=========================*/
-	THD*, st_mysql_sys_var*,
-	void*				var_ptr,/*!< out: where the
-						formal string goes */
-	const void*			save)	/*!< in: immediate result
-						from check function */
-{
-	const char*	table_name;
-	char*		old;
-
-	ut_a(save != NULL);
-	ut_a(var_ptr != NULL);
-
-	table_name = *static_cast<const char*const*>(save);
-	old = *(char**) var_ptr;
-	*(char**) var_ptr = table_name ? my_strdup(table_name, MYF(0)) : NULL;
-	my_free(old);
-
-	fts_internal_tbl_name2 = *(char**) var_ptr;
-	if (fts_internal_tbl_name2 == NULL) {
-		fts_internal_tbl_name = const_cast<char*>("default");
+		return 1;
 	} else {
-		fts_internal_tbl_name = fts_internal_tbl_name2;
+		*static_cast<char**>(save) = NULL;
+		innodb_ft_aux_table_id = 0;
+		return 0;
 	}
 }
 
@@ -17535,32 +17339,6 @@ innodb_make_page_dirty(THD*, st_mysql_sys_var*, void*, const void* save)
 	space->release();
 }
 #endif // UNIV_DEBUG
-/*************************************************************//**
-Just emit a warning that the usage of the variable is deprecated.
-@return 0 */
-static
-void
-innodb_stats_sample_pages_update(
-/*=============================*/
-	THD*				thd,	/*!< in: thread handle */
-	st_mysql_sys_var*, void*,
-	const void*			save)	/*!< in: immediate result
-						from check function */
-{
-
-	const char*	STATS_SAMPLE_PAGES_DEPRECATED_MSG =
-		"Using innodb_stats_sample_pages is deprecated and"
-		" the variable may be removed in future releases."
-		" Please use innodb_stats_transient_sample_pages instead.";
-
-	push_warning(thd, Sql_condition::WARN_LEVEL_WARN,
-		     HA_ERR_WRONG_COMMAND, STATS_SAMPLE_PAGES_DEPRECATED_MSG);
-
-	ib::warn() << STATS_SAMPLE_PAGES_DEPRECATED_MSG;
-
-	srv_stats_transient_sample_pages =
-		*static_cast<const unsigned long long*>(save);
-}
 
 /****************************************************************//**
 Update the monitor counter according to the "set_option",  turn
@@ -18594,17 +18372,24 @@ innodb_encrypt_tables_update(THD*, st_mysql_sys_var*, void*, const void* save)
 	fil_crypt_set_encrypt_tables(*static_cast<const ulong*>(save));
 }
 
-/** Update the innodb_log_checksums parameter.
-@param[in,out]	thd	client connection
-@param[out]	var_ptr	current value
-@param[in]	save	immediate result from check function */
-static
-void
-innodb_log_checksums_update(THD* thd, st_mysql_sys_var*, void* var_ptr,
-			    const void* save)
+/** Issue a deprecation warning for SET GLOBAL innodb_log_checksums.
+@param[in,out]	thd	client connection */
+static void
+innodb_log_checksums_warn(THD* thd, st_mysql_sys_var*, void*, const void*)
 {
-	*static_cast<my_bool*>(var_ptr) = innodb_log_checksums_func_update(
-		thd, *static_cast<const my_bool*>(save));
+	push_warning_printf(thd, Sql_condition::WARN_LEVEL_WARN,
+			    HA_ERR_UNSUPPORTED,
+			    innodb_log_checksums_deprecated);
+}
+
+/** Issue a deprecation warning for SET GLOBAL innodb_undo_logs.
+@param[in,out]	thd	client connection */
+static void
+innodb_undo_logs_warn(THD* thd, st_mysql_sys_var*, void*, const void*)
+{
+	push_warning_printf(thd, Sql_condition::WARN_LEVEL_WARN,
+			    HA_ERR_UNSUPPORTED,
+			    innodb_undo_logs_deprecated);
 }
 
 static SHOW_VAR innodb_status_variables_export[]= {
@@ -18798,21 +18583,16 @@ static MYSQL_SYSVAR_ENUM(checksum_algorithm, srv_checksum_algorithm,
   " Files updated when this option is set to crc32 or strict_crc32 will"
   " not be readable by MariaDB versions older than 10.0.4;"
   " new files created with full_crc32 are readable by MariaDB 10.4.3+",
-  NULL, NULL, SRV_CHECKSUM_ALGORITHM_CRC32,
+  NULL, NULL, SRV_CHECKSUM_ALGORITHM_FULL_CRC32,
   &innodb_checksum_algorithm_typelib);
+
+/** Description of deprecated and ignored parameters */
+static const char* innodb_deprecated_ignored
+= "Deprecated parameter with no effect.";
 
 static MYSQL_SYSVAR_BOOL(log_checksums, innodb_log_checksums,
   PLUGIN_VAR_RQCMDARG,
-  "Whether to compute and require checksums for InnoDB redo log blocks",
-  NULL, innodb_log_checksums_update, TRUE);
-
-static MYSQL_SYSVAR_BOOL(checksums, innobase_use_checksums,
-  PLUGIN_VAR_NOCMDARG | PLUGIN_VAR_READONLY,
-  "DEPRECATED. Use innodb_checksum_algorithm=NONE instead of setting"
-  " this to OFF."
-  " Enable InnoDB checksums validation (enabled by default)."
-  " Disable with --skip-innodb-checksums.",
-  NULL, NULL, TRUE);
+  innodb_deprecated_ignored, NULL, innodb_log_checksums_warn, TRUE);
 
 static MYSQL_SYSVAR_STR(data_home_dir, innobase_data_home_dir,
   PLUGIN_VAR_READONLY,
@@ -18955,21 +18735,14 @@ static MYSQL_SYSVAR_ENUM(flush_method, innodb_flush_method,
 
 static MYSQL_SYSVAR_STR(file_format, innodb_file_format,
   PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
-  "Deprecated parameter with no effect.", NULL, NULL, NULL);
+  innodb_deprecated_ignored, NULL, NULL, NULL);
 static MYSQL_SYSVAR_STR(large_prefix, innodb_large_prefix,
   PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
-  "Deprecated parameter with no effect.", NULL, NULL, NULL);
+  innodb_deprecated_ignored, NULL, NULL, NULL);
 
 static MYSQL_SYSVAR_BOOL(force_load_corrupted, srv_load_corrupted,
   PLUGIN_VAR_NOCMDARG | PLUGIN_VAR_READONLY,
   "Force InnoDB to load metadata of corrupted table.",
-  NULL, NULL, FALSE);
-
-static MYSQL_SYSVAR_BOOL(locks_unsafe_for_binlog, innobase_locks_unsafe_for_binlog,
-  PLUGIN_VAR_NOCMDARG | PLUGIN_VAR_READONLY,
-  "DEPRECATED. This option may be removed in future releases."
-  " Please use READ COMMITTED transaction isolation level instead."
-  " Force InnoDB to not use next-key locking, to use only row-level locking.",
   NULL, NULL, FALSE);
 
 static MYSQL_SYSVAR_STR(log_group_home_dir, srv_log_group_home_dir,
@@ -19052,11 +18825,6 @@ static MYSQL_SYSVAR_BOOL(stats_on_metadata, innobase_stats_on_metadata,
   "Enable statistics gathering for metadata commands such as"
   " SHOW TABLE STATUS for tables that use transient statistics (off by default)",
   NULL, NULL, FALSE);
-
-static MYSQL_SYSVAR_ULONGLONG(stats_sample_pages, srv_stats_transient_sample_pages,
-  PLUGIN_VAR_RQCMDARG,
-  "Deprecated, use innodb_stats_transient_sample_pages instead",
-  NULL, innodb_stats_sample_pages_update, 8, 1, ~0ULL, 0);
 
 static MYSQL_SYSVAR_ULONGLONG(stats_transient_sample_pages,
   srv_stats_transient_sample_pages,
@@ -19361,11 +19129,10 @@ static MYSQL_SYSVAR_BOOL(disable_sort_file_cache, srv_disable_sort_file_cache,
   "Whether to disable OS system file cache for sort I/O",
   NULL, NULL, FALSE);
 
-static MYSQL_SYSVAR_STR(ft_aux_table, fts_internal_tbl_name2,
-  PLUGIN_VAR_RQCMDARG,
+static MYSQL_SYSVAR_STR(ft_aux_table, innodb_ft_aux_table,
+  PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_MEMALLOC,
   "FTS internal auxiliary table to be checked",
-  innodb_internal_table_validate,
-  innodb_internal_table_update, NULL);
+  innodb_ft_aux_table_validate, NULL, NULL);
 
 static MYSQL_SYSVAR_ULONG(ft_cache_size, fts_max_cache_size,
   PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
@@ -19541,13 +19308,10 @@ static MYSQL_SYSVAR_ULONG(undo_tablespaces, srv_undo_tablespaces,
   0L,			/* Minimum value */
   TRX_SYS_MAX_UNDO_SPACES, 0); /* Maximum value */
 
-static MYSQL_SYSVAR_ULONG(undo_logs, srv_undo_logs,
+static MYSQL_SYSVAR_ULONG(undo_logs, innodb_undo_logs,
   PLUGIN_VAR_OPCMDARG,
-  "Number of undo logs to use.",
-  NULL, NULL,
-  TRX_SYS_N_RSEGS,	/* Default setting */
-  1,			/* Minimum value */
-  TRX_SYS_N_RSEGS, 0);	/* Maximum value */
+  innodb_deprecated_ignored, NULL, innodb_undo_logs_warn,
+  TRX_SYS_N_RSEGS, 0, TRX_SYS_N_RSEGS, 0);
 
 static MYSQL_SYSVAR_ULONGLONG(max_undo_log_size, srv_max_undo_log_size,
   PLUGIN_VAR_OPCMDARG,
@@ -19567,15 +19331,6 @@ static MYSQL_SYSVAR_BOOL(undo_log_truncate, srv_undo_log_truncate,
   PLUGIN_VAR_OPCMDARG,
   "Enable or Disable Truncate of UNDO tablespace.",
   NULL, NULL, FALSE);
-
-/* Alias for innodb_undo_logs, this config variable is deprecated. */
-static MYSQL_SYSVAR_ULONG(rollback_segments, srv_undo_logs,
-  PLUGIN_VAR_OPCMDARG,
-  "Number of undo logs to use (deprecated).",
-  NULL, NULL,
-  TRX_SYS_N_RSEGS,	/* Default setting */
-  1,			/* Minimum value */
-  TRX_SYS_N_RSEGS, 0);	/* Maximum value */
 
 static MYSQL_SYSVAR_LONG(autoinc_lock_mode, innobase_autoinc_lock_mode,
   PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
@@ -19990,7 +19745,6 @@ static struct st_mysql_sys_var* innobase_system_variables[]= {
   MYSQL_SYSVAR(flush_neighbors),
   MYSQL_SYSVAR(checksum_algorithm),
   MYSQL_SYSVAR(log_checksums),
-  MYSQL_SYSVAR(checksums),
   MYSQL_SYSVAR(commit_concurrency),
   MYSQL_SYSVAR(concurrency_tickets),
   MYSQL_SYSVAR(compression_level),
@@ -20021,7 +19775,6 @@ static struct st_mysql_sys_var* innobase_system_variables[]= {
   MYSQL_SYSVAR(large_prefix), /* deprecated in MariaDB 10.2; no effect */
   MYSQL_SYSVAR(force_load_corrupted),
   MYSQL_SYSVAR(lock_schedule_algorithm),
-  MYSQL_SYSVAR(locks_unsafe_for_binlog),
   MYSQL_SYSVAR(lock_wait_timeout),
   MYSQL_SYSVAR(deadlock_detect),
   MYSQL_SYSVAR(page_size),
@@ -20051,7 +19804,6 @@ static struct st_mysql_sys_var* innobase_system_variables[]= {
   MYSQL_SYSVAR(ft_user_stopword_table),
   MYSQL_SYSVAR(disable_sort_file_cache),
   MYSQL_SYSVAR(stats_on_metadata),
-  MYSQL_SYSVAR(stats_sample_pages),
   MYSQL_SYSVAR(stats_transient_sample_pages),
   MYSQL_SYSVAR(stats_persistent),
   MYSQL_SYSVAR(stats_persistent_sample_pages),
@@ -20122,7 +19874,6 @@ static struct st_mysql_sys_var* innobase_system_variables[]= {
   MYSQL_SYSVAR(max_undo_log_size),
   MYSQL_SYSVAR(purge_rseg_truncate_frequency),
   MYSQL_SYSVAR(undo_log_truncate),
-  MYSQL_SYSVAR(rollback_segments),
   MYSQL_SYSVAR(undo_directory),
   MYSQL_SYSVAR(undo_tablespaces),
   MYSQL_SYSVAR(sync_array_size),
@@ -20458,10 +20209,10 @@ for purge thread */
 static TABLE* innodb_find_table_for_vc(THD* thd, dict_table_t* table)
 {
 	if (THDVAR(thd, background_thread)) {
-		/* Purge thread acquires dict_operation_lock while
-		processing undo log record. Release the dict_operation_lock
+		/* Purge thread acquires dict_sys.latch while
+		processing undo log record. Release it
 		before acquiring MDL on the table. */
-		rw_lock_s_unlock(dict_operation_lock);
+		rw_lock_s_unlock(&dict_sys.latch);
 		return innodb_acquire_mdl(thd, table);
 	} else {
 		if (table->vc_templ->mysql_table_query_id
@@ -20506,9 +20257,9 @@ TABLE* innobase_init_vc_templ(dict_table_t* table)
 		return NULL;
 	}
 
-	mutex_enter(&dict_sys->mutex);
+	mutex_enter(&dict_sys.mutex);
 	innobase_build_v_templ(mysql_table, table, table->vc_templ, NULL, true);
-	mutex_exit(&dict_sys->mutex);
+	mutex_exit(&dict_sys.mutex);
 	return mysql_table;
 }
 

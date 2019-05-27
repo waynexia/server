@@ -11,7 +11,7 @@
 
    You should have received a copy of the GNU General Public License
    along with this program; if not, write to the Free Software
-   Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02111-1301 USA */
+   Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1335 USA */
 
 #include "mariadb.h"
 #include <violite.h>
@@ -23,7 +23,7 @@
 #include <sql_audit.h>
 #include <debug_sync.h>
 #include <threadpool.h>
-
+#include <my_counter.h>
 
 /* Threadpool parameters */
 
@@ -36,6 +36,8 @@ uint threadpool_max_threads;
 uint threadpool_oversubscribe;
 uint threadpool_mode;
 uint threadpool_prio_kickup_timer;
+my_bool threadpool_exact_stats;
+my_bool threadpool_dedicated_listener;
 
 /* Stats */
 TP_STATISTICS tp_stats;
@@ -153,9 +155,8 @@ static TP_PRIORITY get_priority(TP_connection *c)
   DBUG_ASSERT(c->thd == current_thd);
   TP_PRIORITY prio= (TP_PRIORITY)c->thd->variables.threadpool_priority;
   if (prio == TP_PRIORITY_AUTO)
-  {
-    return c->thd->transaction.is_active() ? TP_PRIORITY_HIGH : TP_PRIORITY_LOW;
-  }
+    prio= c->thd->transaction.is_active() ? TP_PRIORITY_HIGH : TP_PRIORITY_LOW;
+
   return prio;
 }
 
@@ -380,19 +381,6 @@ end:
 }
 
 
-
-/* Dummy functions, do nothing */
-
-static bool tp_init_new_connection_thread()
-{
-  return 0;
-}
-
-static bool tp_end_thread(THD *, bool)
-{
-  return 0;
-}
-
 static TP_pool *pool;
 
 static bool tp_init()
@@ -476,12 +464,17 @@ void tp_timeout_handler(TP_connection *c)
   mysql_mutex_unlock(&thd->LOCK_thd_kill);
 }
 
+MY_ALIGNED(CPU_LEVEL1_DCACHE_LINESIZE) Atomic_counter<unsigned long long> tp_waits[THD_WAIT_LAST];
 
 static void tp_wait_begin(THD *thd, int type)
 {
   TP_connection *c = get_TP_connection(thd);
   if (c)
+  {
+    DBUG_ASSERT(type > 0 && type < THD_WAIT_LAST);
+    tp_waits[type]++;
     c->wait_begin(type);
+  }
 }
 
 
@@ -512,18 +505,16 @@ static scheduler_functions tp_scheduler_functions=
   NULL,
   NULL,
   tp_init,                            // init
-  tp_init_new_connection_thread,      // init_new_connection_thread
   tp_add_connection,                  // add_connection
   tp_wait_begin,                      // thd_wait_begin
   tp_wait_end,                        // thd_wait_end
   tp_post_kill_notification,          // post kill notification
-  tp_end_thread,                      // Dummy function
   tp_end                              // end
 };
 
 void pool_of_threads_scheduler(struct scheduler_functions *func,
     ulong *arg_max_connections,
-    uint *arg_connection_count)
+    Atomic_counter<uint> *arg_connection_count)
 {
   *func = tp_scheduler_functions;
   func->max_threads= threadpool_max_threads;

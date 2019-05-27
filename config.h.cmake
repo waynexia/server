@@ -11,7 +11,7 @@
  
  You should have received a copy of the GNU General Public License
  along with this program; if not, write to the Free Software
- Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA */
+ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1335  USA */
 
 #ifndef MY_CONFIG_H
 #define MY_CONFIG_H
@@ -106,6 +106,11 @@
 #cmakedefine HAVE_LIBWRAP 1
 #cmakedefine HAVE_SYSTEMD 1
 #cmakedefine HAVE_CRC32_VPMSUM 1
+
+/* Support ARMv8 crc + crypto  */
+#cmakedefine HAVE_ARMV8_CRC 1
+#cmakedefine HAVE_ARMV8_CRYPTO 1
+#cmakedefine HAVE_ARMV8_CRC_CRYPTO_INTRINSICS 1
 
 /* Does "struct timespec" have a "sec" and "nsec" field? */
 #cmakedefine HAVE_TIMESPEC_TS_SEC 1
@@ -380,6 +385,7 @@
 #cmakedefine HAVE_SVR3_SIGNALS 1
 #cmakedefine HAVE_V7_SIGNALS 1
 #cmakedefine HAVE_ERR_remove_thread_state 1
+#cmakedefine HAVE_X509_check_host 1
 
 #cmakedefine HAVE_SOLARIS_STYLE_GETHOST 1
 

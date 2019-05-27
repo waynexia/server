@@ -13,7 +13,7 @@ FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
 
 You should have received a copy of the GNU General Public License along with
 this program; if not, write to the Free Software Foundation, Inc.,
-51 Franklin Street, Suite 500, Boston, MA 02110-1335 USA
+51 Franklin Street, Fifth Floor, Boston, MA 02110-1335 USA
 
 *****************************************************************************/
 
@@ -580,10 +580,10 @@ trx_resurrect_table_locks(
 		if (dict_table_t* table = dict_table_open_on_id(
 			    *i, FALSE, DICT_TABLE_OP_LOAD_TABLESPACE)) {
 			if (!table->is_readable()) {
-				mutex_enter(&dict_sys->mutex);
+				mutex_enter(&dict_sys.mutex);
 				dict_table_close(table, TRUE, FALSE);
-				dict_table_remove_from_cache(table);
-				mutex_exit(&dict_sys->mutex);
+				dict_sys.remove(table);
+				mutex_exit(&dict_sys.mutex);
 				continue;
 			}
 
@@ -776,10 +776,12 @@ evenly distributed between 0 and innodb_undo_logs-1
 @retval	NULL	if innodb_read_only */
 static trx_rseg_t* trx_assign_rseg_low()
 {
-	if (srv_read_only_mode) {
-		ut_ad(srv_undo_logs == ULONG_UNDEFINED);
+	if (high_level_read_only) {
+		ut_ad(!srv_available_undo_logs);
 		return(NULL);
 	}
+
+	ut_ad(srv_available_undo_logs == TRX_SYS_N_RSEGS);
 
 	/* The first slot is always assigned to the system tablespace. */
 	ut_ad(trx_sys.rseg_array[0]->space == fil_system.sys_space);
@@ -793,7 +795,8 @@ static trx_rseg_t* trx_assign_rseg_low()
 	that start modifications concurrently will write their undo
 	log to the same rollback segment. */
 	static ulong	rseg_slot;
-	ulint		slot = rseg_slot++ % srv_undo_logs;
+	ulint		slot = rseg_slot++ % TRX_SYS_N_RSEGS;
+	ut_d(if (trx_rseg_n_slots_debug) slot = 0);
 	trx_rseg_t*	rseg;
 
 #ifdef UNIV_DEBUG
@@ -816,7 +819,8 @@ static trx_rseg_t* trx_assign_rseg_low()
 			look_for_rollover = true;
 #endif /* UNIV_DEBUG */
 
-			slot = (slot + 1) % srv_undo_logs;
+			ut_d(if (!trx_rseg_n_slots_debug))
+			slot = (slot + 1) % TRX_SYS_N_RSEGS;
 
 			if (rseg == NULL) {
 				continue;
@@ -1279,7 +1283,7 @@ void trx_t::evict_table(table_id_t table_id)
 	ut_ad(UT_LIST_GET_LEN(table->locks) <= 1);
 	const bool locked = UT_LIST_GET_LEN(table->locks);
 	ut_ad(!locked || UT_LIST_GET_FIRST(table->locks)->trx == this);
-	dict_table_remove_from_cache(table, true, locked);
+	dict_sys.remove(table, true, locked);
 	if (locked) {
 		UT_LIST_ADD_FIRST(lock.evicted_tables, table);
 	}

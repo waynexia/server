@@ -85,6 +85,8 @@ insert into t1_temp values (1);
 return 0;
 end|
 create event e1 on schedule every 1 minute do begin end;
+Warnings:
+Warning	1105	Event scheduler is switched off, use SET GLOBAL event_scheduler=ON to enable it.
 connect  con1,localhost,root,,;
 connect  con2,localhost,root,,;
 connect  con3,localhost,root,,;
@@ -1736,26 +1738,30 @@ SET DEBUG_SYNC= 'RESET';
 # MDEV-19384 Deadlock between FTWRL under open HANDLER, LOCK TABLE
 # and DROP DATABASE
 #
+SET DEBUG_SYNC= 'ftwrl_before_lock SIGNAL ready WAIT_FOR go';
 CREATE DATABASE mysqltest;
 CREATE TABLE mysqltest.t1(a INT);
 HANDLER mysqltest.t1 OPEN as t1;
 connect  con1,localhost,root,,;
-SET DEBUG_SYNC= 'mdl_acquire_lock_wait SIGNAL ready';
+SET DEBUG_SYNC= 'mdl_acquire_lock_wait SIGNAL ready1';
 LOCK TABLE mysqltest.t1 WRITE;
 connect  con2,localhost,root,,;
-SET DEBUG_SYNC= 'now WAIT_FOR ready';
-SET DEBUG_SYNC= 'mdl_acquire_lock_wait SIGNAL ready';
+SET DEBUG_SYNC= 'now WAIT_FOR ready1';
+SET DEBUG_SYNC= 'mdl_acquire_lock_wait SIGNAL ready2';
 DROP DATABASE mysqltest;
 connect  con3,localhost,root,,;
-SET DEBUG_SYNC= 'now WAIT_FOR ready';
-disconnect con3;
+SET DEBUG_SYNC= 'now WAIT_FOR ready2';
 connection default;
 FLUSH TABLES WITH READ LOCK;
+connection con3;
+SET DEBUG_SYNC= 'now WAIT_FOR ready';
+disconnect con3;
+connection con1;
+SET DEBUG_SYNC= 'now SIGNAL go';
+disconnect con1;
+connection default;
 UNLOCK TABLES;
 HANDLER t1 CLOSE;
-connection con1;
-UNLOCK TABLES;
-disconnect con1;
 connection con2;
 disconnect con2;
 connection default;

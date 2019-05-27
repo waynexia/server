@@ -26,13 +26,14 @@ perl;
                collation-server character-set-server log-tc-size version.*/;
 
   # Plugins which may or may not be there:
-  @plugins=qw/innodb archive blackhole federated partition
+  @plugins=qw/innodb archive blackhole federated partition s3
               feedback debug temp-pool ssl des-key-file xtradb sequence
               thread-concurrency super-large-pages mutex-deadlock-detector
               connect null-audit aria oqgraph sphinx thread-handling
               test-sql-discovery query-cache-info in-predicate-conversion-threshold
               query-response-time metadata-lock-info locales unix-socket
-              wsrep file-key-management cracklib-password-check user-variables/;
+              wsrep file-key-management cracklib-password-check user-variables
+              thread-pool-groups thread-pool-queues thread-pool-stats thread-pool-waits/;
 
   # And substitute the content some environment variables with their
   # names:
