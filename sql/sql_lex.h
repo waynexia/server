@@ -871,7 +871,7 @@ public:
     There is INTERSECT and it is item used in creating temporary
     table for it
   */
-  Item_int *intersect_mark;
+  Item_int *intersect_mark, *duplicate_cnt;
   /**
      TRUE if the unit contained TVC at the top level that has been wrapped
      into SELECT:
