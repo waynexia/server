@@ -5687,15 +5687,16 @@ class select_unit :public select_result_interceptor
 {
   uint curr_step, prev_step, curr_sel;
   enum sub_select_type step;
+  bool is_distinct;
 public:
-  Item_int *intersect_mark;
+  Item_int *intersect_mark, *duplicate_cnt;
   TMP_TABLE_PARAM tmp_table_param;
   int write_err; /* Error code from the last send_data->ha_write_row call. */
   TABLE *table;
 
   select_unit(THD *thd_arg):
     select_result_interceptor(thd_arg),
-    intersect_mark(0), table(0)
+    intersect_mark(0), duplicate_cnt(0), table(0)
   {
     init();
     tmp_table_param.init();
@@ -5729,6 +5730,7 @@ public:
     curr_sel= UINT_MAX;
     step= UNION_TYPE;
     write_err= 0;
+    is_distinct = true;
   }
   void change_select();
 };

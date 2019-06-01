@@ -69,6 +69,7 @@ void select_unit::change_select()
   /* New SELECT processing starts */
   DBUG_ASSERT(table->file->inited == 0);
   step= thd->lex->current_select->get_linkage();
+  is_distinct = thd->lex->current_select->distinct;
   switch (step)
   {
   case INTERSECT_TYPE:
@@ -119,13 +120,55 @@ int select_unit::send_data(List<Item> &values)
     return 0;
   if (table->no_rows_with_nulls)
     table->null_catch_flags= CHECK_ROW_FOR_NULLS_TO_REJECT;
+
+  // try to process
+  /*
+  uchar *item;
+  List_iterator_fast<Item> it(values);
+  if(!is_distinct){
+    switch (step){
+      case EXCEPT_TYPE:
+        int find_res;
+        while ((item= (uchar*) it++))
+        {
+          find_res = table->file->find_unique_row(item, 0);
+          if(find_res)
+          {
+            not_reported_error= table->file->ha_delete_tmp_row(item);
+            rc= MY_TEST(not_reported_error);
+            goto end;
+          }
+        }
+        
+        rc = 0;
+        goto end;
+      default:
+        while((item= (uchar*) it++))
+        {
+          if(unlikely((write_err=
+                    table->file->ha_write_tmp_row(item))))
+          {
+            //foo
+          }
+        }
+        rc = 0;
+        goto end;
+    }
+  }*/
+
   if (intersect_mark)
   {
-    fill_record(thd, table, table->field + 1, values, TRUE, FALSE);
-    table->field[0]->store((ulonglong) curr_step, 1);
+    fill_record(thd, table, table->field + 1 + 1, values, TRUE, FALSE);
+    table->field[0]->store((ulonglong) 1, 1);
+    //fill_record(thd, table, table->field + 1, values, TRUE, FALSE);
+    table->field[1]->store((ulonglong) curr_step, 1);
   }
   else
-    fill_record(thd, table, table->field, values, TRUE, FALSE);
+  {
+    fill_record(thd, table, table->field + 1, values, TRUE, FALSE);
+    //fill_record(thd, table, table->field, values, TRUE, FALSE);
+    table->field[0]->store((ulonglong) 1, 1);
+  }
   if (unlikely(thd->is_error()))
   {
     rc= 1;
@@ -181,6 +224,27 @@ int select_unit::send_data(List<Item> &values)
     case EXCEPT_TYPE:
     {
       int find_res;
+      if(!is_distinct)
+      {
+        if (!(find_res= table->file->find_unique_row(table->record[0], 0)))
+        {
+          if(table->field[0]->val_int() <= 1)
+          {
+            table->status|= STATUS_DELETED;
+            not_reported_error= table->file->ha_delete_tmp_row(table->record[0]);
+          }
+          else
+          {
+            store_record(table, record[1]);
+            table->field[0]->store(table->field[0]->val_int()- 1, 0);
+            not_reported_error|= table->file->ha_update_tmp_row(table->record[1],
+                                                                table->record[0]);
+          }
+          DBUG_ASSERT(!table->triggers);
+          rc= MY_TEST(not_reported_error);
+          goto end;
+        }
+      }
       /*
         The temporary table uses very first index or constrain for
         checking unique constrain.
@@ -210,13 +274,13 @@ int select_unit::send_data(List<Item> &values)
       if (!(find_res= table->file->find_unique_row(table->record[0], 0)))
       {
         DBUG_ASSERT(!table->triggers);
-        if (table->field[0]->val_int() != prev_step)
+        if (table->field[1]->val_int() != prev_step)
         {
           rc= 0;
           goto end;
         }
         store_record(table, record[1]);
-        table->field[0]->store(curr_step, 0);
+        table->field[1]->store(curr_step, 0);
         not_reported_error= table->file->ha_update_tmp_row(table->record[1],
                                                             table->record[0]);
         rc= MY_TEST(not_reported_error);
@@ -282,7 +346,7 @@ bool select_unit::send_eof()
       }
       break;
     }
-    if (table->field[0]->val_int() != curr_step)
+    if (table->field[1]->val_int() != curr_step)
       error= file->ha_delete_tmp_row(table->record[0]);
   } while (likely(!error));
   file->ha_rnd_end();
@@ -345,6 +409,7 @@ bool select_unit::flush()
       create_table       whether to physically create result table
       keep_row_order     keep rows in order as they were inserted
       hidden             number of hidden fields (for INTERSECT)
+                         plus one for `ALL`
 
   DESCRIPTION
     Create a temporary table that is used to store the result of a UNION,
@@ -368,7 +433,9 @@ select_unit::create_result_table(THD *thd_arg, List<Item> *column_types,
   tmp_table_param.field_count= column_types->elements;
   tmp_table_param.bit_fields_as_long= bit_fields_as_long;
   tmp_table_param.hidden_field_count= hidden;
+  //tmp_table_param.hidden_field_count= 1;
 
+  is_union_distinct = true;
   if (! (table= create_tmp_table(thd_arg, &tmp_table_param, *column_types,
                                  (ORDER*) 0, is_union_distinct, 1,
                                  options, HA_POS_ERROR, alias,
@@ -940,20 +1007,20 @@ bool st_select_lex_unit::prepare(TABLE_LIST *derived_arg,
     else
     {
       if (!is_recursive)
-	union_result= new (thd->mem_root) select_unit(thd);
+	      union_result= new (thd->mem_root) select_unit(thd);
       else
       {
         with_element->rec_result=
           new (thd->mem_root) select_union_recursive(thd);
         union_result=  with_element->rec_result;
         if (fake_select_lex)
-	{
+	      {
           if (fake_select_lex->order_list.first ||
               fake_select_lex->explicit_limit)
           {
-	    my_error(ER_NOT_SUPPORTED_YET, MYF(0),
-                     "global ORDER_BY/LIMIT in recursive CTE spec");
-	    goto err;
+            my_error(ER_NOT_SUPPORTED_YET, MYF(0),
+                          "global ORDER_BY/LIMIT in recursive CTE spec");
+            goto err;
           }
           fake_select_lex->cleanup();
           fake_select_lex= NULL;
@@ -974,7 +1041,7 @@ bool st_select_lex_unit::prepare(TABLE_LIST *derived_arg,
     if (sl->tvc)
     {
       if (sl->tvc->prepare(thd, sl, tmp_result, this))
-	goto err;
+	      goto err;
     }
     else if (prepare_join(thd, first_sl, tmp_result, additional_options,
                      is_union_select))
@@ -1168,10 +1235,23 @@ cont:
 
     if (!is_recursive)
     {
-      uint hidden= 0;
+      uint hidden= 1;
+      // add duplicate_count
+      if (!duplicate_cnt)
+      {
+        duplicate_cnt= new (thd->mem_root) Item_int(thd, 0);
+      }
+      else
+      {
+        duplicate_cnt->value= 0;
+      }
+      types.push_front(union_result->duplicate_cnt= duplicate_cnt);
+      union_result->duplicate_cnt->name.str= "_DUP_CNT";
+      union_result->duplicate_cnt->name.length = 8;
+      // add intersect_mark
       if (have_intersect)
       {
-        hidden= 1;
+        hidden= 2;
         if (!intersect_mark)
         {
           /*
@@ -1194,15 +1274,17 @@ cont:
         else
           intersect_mark->value= 0; //reset
         types.push_front(union_result->intersect_mark= intersect_mark);
-        union_result->intersect_mark->name.str= "___";
-        union_result->intersect_mark->name.length= 3;
-      }
+        union_result->intersect_mark->name.str= "_INT_MARK";
+        union_result->intersect_mark->name.length= 9;
+      }      
       bool error=
         union_result->create_result_table(thd, &types,
                                           MY_TEST(union_distinct),
                                           create_options, &empty_clex_str, false,
                                           instantiate_tmp_table, false,
                                           hidden);
+      if (duplicate_cnt)
+        types.pop();
       if (intersect_mark)
         types.pop();
       if (unlikely(error))
@@ -1236,6 +1318,8 @@ cont:
       
       saved_error= table->fill_item_list(&item_list);
       // Item_list is inherited from 'types', so there could be the counter
+      if (duplicate_cnt)
+        item_list.pop();
       if (intersect_mark)
         item_list.pop(); // remove intersect counter
 
@@ -1282,7 +1366,8 @@ cont:
         We're in execution of a prepared statement or stored procedure:
         reset field items to point at fields from the created temporary table.
       */
-      table->reset_item_list(&item_list, intersect_mark ? 1 : 0);
+      table->reset_item_list(&item_list, (intersect_mark ? 1 : 0) +
+                                         (duplicate_cnt ? 1 : 0));
     }
     if (fake_select_lex != NULL &&
         (thd->stmt_arena->is_stmt_prepare() ||
@@ -1474,15 +1559,15 @@ bool st_select_lex_unit::exec()
 
       {
         set_limit(sl);
-	if (sl == global_parameters() || describe)
-	{
-	  offset_limit_cnt= 0;
-	  /*
-	    We can't use LIMIT at this stage if we are using ORDER BY for the
-	    whole query
-	  */
-	  if (sl->order_list.first || describe)
-	    select_limit_cnt= HA_POS_ERROR;
+        if (sl == global_parameters() || describe)
+        {
+          offset_limit_cnt= 0;
+          /*
+            We can't use LIMIT at this stage if we are using ORDER BY for the
+            whole query
+          */
+          if (sl->order_list.first || describe)
+            select_limit_cnt= HA_POS_ERROR;
         }
 
         /*
@@ -1490,56 +1575,56 @@ bool st_select_lex_unit::exec()
           we don't calculate found_rows() per union part.
           Otherwise, SQL_CALC_FOUND_ROWS should be done on all sub parts.
         */
-	if (sl->tvc)
-	{
-	  sl->tvc->select_options=
-             (select_limit_cnt == HA_POS_ERROR || sl->braces) ?
-             sl->options & ~OPTION_FOUND_ROWS : sl->options | found_rows_for_union;
-	  saved_error= sl->tvc->optimize(thd);
-	}
-	else
-	{
-          sl->join->select_options= 
-            (select_limit_cnt == HA_POS_ERROR || sl->braces) ?
-            sl->options & ~OPTION_FOUND_ROWS : sl->options | found_rows_for_union;
-	  saved_error= sl->join->optimize();
-	}
+        if (sl->tvc)
+        {
+          sl->tvc->select_options=
+                  (select_limit_cnt == HA_POS_ERROR || sl->braces) ?
+                  sl->options & ~OPTION_FOUND_ROWS : sl->options | found_rows_for_union;
+          saved_error= sl->tvc->optimize(thd);
+        }
+        else
+        {
+                sl->join->select_options= 
+                  (select_limit_cnt == HA_POS_ERROR || sl->braces) ?
+                  sl->options & ~OPTION_FOUND_ROWS : sl->options | found_rows_for_union;
+          saved_error= sl->join->optimize();
+        }
       }
       if (likely(!saved_error))
       {
-	records_at_start= table->file->stats.records;
-	if (sl->tvc)
-	  sl->tvc->exec(sl);
-	else
-	  sl->join->exec();
-        if (sl == union_distinct && !(with_element && with_element->is_recursive))
-	{
-          // This is UNION DISTINCT, so there should be a fake_select_lex
-          DBUG_ASSERT(fake_select_lex != NULL);
-	  if (unlikely(table->file->ha_disable_indexes(HA_KEY_SWITCH_ALL)))
-	    DBUG_RETURN(TRUE);
-	  table->no_keyread=1;
-	}
-	if (!sl->tvc)
-	  saved_error= sl->join->error;
-	offset_limit_cnt= (ha_rows)(sl->offset_limit ?
-                                    sl->offset_limit->val_uint() :
-                                    0);
-	if (likely(!saved_error))
-	{
-	  examined_rows+= thd->get_examined_row_count();
-          thd->set_examined_row_count(0);
-	  if (union_result->flush())
-	  {
-	    thd->lex->current_select= lex_select_save;
-	    DBUG_RETURN(1);
-	  }
-	}
+        records_at_start= table->file->stats.records;
+        if (sl->tvc)
+          sl->tvc->exec(sl);
+        else
+          sl->join->exec();
+              if (sl == union_distinct && !(with_element && with_element->is_recursive))
+        {
+                // This is UNION DISTINCT, so there should be a fake_select_lex
+                DBUG_ASSERT(fake_select_lex != NULL);
+          if (unlikely(table->file->ha_disable_indexes(HA_KEY_SWITCH_ALL)))
+            DBUG_RETURN(TRUE);
+          table->no_keyread=1;
+        }
+        if (!sl->tvc)
+          saved_error= sl->join->error;
+        offset_limit_cnt= (ha_rows)(sl->offset_limit ?
+                                          sl->offset_limit->val_uint() :
+                                          0);
+        if (likely(!saved_error))
+        {
+          examined_rows+= thd->get_examined_row_count();
+                thd->set_examined_row_count(0);
+          if (union_result->flush())
+          {
+            thd->lex->current_select= lex_select_save;
+            DBUG_RETURN(1);
+          }
+        }
       }
       if (unlikely(saved_error))
       {
-	thd->lex->current_select= lex_select_save;
-	DBUG_RETURN(saved_error);
+        thd->lex->current_select= lex_select_save;
+        DBUG_RETURN(saved_error);
       }
       if (fake_select_lex != NULL)
       {
@@ -1554,14 +1639,14 @@ bool st_select_lex_unit::exec()
       if (found_rows_for_union && !sl->braces && 
           select_limit_cnt != HA_POS_ERROR)
       {
-	/*
-	  This is a union without braces. Remember the number of rows that
-	  could also have been part of the result set.
-	  We get this from the difference of between total number of possible
-	  rows and actual rows added to the temporary table.
-	*/
-	add_rows+= (ulonglong) (thd->limit_found_rows - (ulonglong)
-			      ((table->file->stats.records -  records_at_start)));
+        /*
+          This is a union without braces. Remember the number of rows that
+          could also have been part of the result set.
+          We get this from the difference of between total number of possible
+          rows and actual rows added to the temporary table.
+        */
+        add_rows+= (ulonglong) (thd->limit_found_rows - (ulonglong)
+                  ((table->file->stats.records -  records_at_start)));
       }
       if (thd->killed == ABORT_QUERY)
       {

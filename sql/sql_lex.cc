@@ -2365,6 +2365,7 @@ void st_select_lex_unit::init_query()
   with_element= 0;
   columns_are_renamed= false;
   intersect_mark= NULL;
+  duplicate_cnt = NULL;
   with_wrapped_tvc= false;
 }
 
