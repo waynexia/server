@@ -189,36 +189,45 @@ int select_unit::send_data(List<Item> &values)
   {
     case UNION_TYPE:
     {
-      if (unlikely((write_err=
-                    table->file->ha_write_tmp_row(table->record[0]))))
+      int find_res;
+      if (!(find_res= table->file->find_unique_row(table->record[0], 0)))
       {
-        if (write_err == HA_ERR_FOUND_DUPP_KEY)
-        {
-          /*
-            Inform upper level that we found a duplicate key, that should not
-            be counted as part of limit
-          */
-          rc= -1;
-          goto end;
-        }
-        bool is_duplicate= FALSE;
-        /* create_internal_tmp_table_from_heap will generate error if needed */
-        if (table->file->is_fatal_error(write_err, HA_CHECK_DUP) &&
-            create_internal_tmp_table_from_heap(thd, table,
-                                                tmp_table_param.start_recinfo,
-                                                &tmp_table_param.recinfo,
-                                                write_err, 1, &is_duplicate))
-        {
-          rc= 1;
-          goto end;
-        }
-
-        if (is_duplicate)
-        {
-          rc= -1;
-          goto end;
-        }
+        store_record(table, record[1]);
+        table->field[0]->store(table->field[0]->val_int()+ 1, 0);
+        not_reported_error|= table->file->ha_update_tmp_row(table->record[1],
+                                                            table->record[0]);
       }
+      else
+        if (unlikely((write_err=
+                      table->file->ha_write_tmp_row(table->record[0]))))
+        {
+          if (write_err == HA_ERR_FOUND_DUPP_KEY)
+          {
+            /*
+              Inform upper level that we found a duplicate key, that should not
+              be counted as part of limit
+            */
+            rc= -1;
+            goto end;
+          }
+          bool is_duplicate= FALSE;
+          /* create_internal_tmp_table_from_heap will generate error if needed */
+          if (table->file->is_fatal_error(write_err, HA_CHECK_DUP) &&
+              create_internal_tmp_table_from_heap(thd, table,
+                                                  tmp_table_param.start_recinfo,
+                                                  &tmp_table_param.recinfo,
+                                                  write_err, 1, &is_duplicate))
+          {
+            rc= 1;
+            goto end;
+          }
+
+          if (is_duplicate)
+          {
+            rc= -1;
+            goto end;
+          }
+        }
       break;
     }
     case EXCEPT_TYPE:
