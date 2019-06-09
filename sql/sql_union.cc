@@ -161,7 +161,7 @@ int select_unit::send_data(List<Item> &values)
     fill_record(thd, table, table->field + 1 + 1, values, TRUE, FALSE);
     table->field[0]->store((ulonglong) 1, 1);
     //fill_record(thd, table, table->field + 1, values, TRUE, FALSE);
-    table->field[1]->store((ulonglong) curr_step, 1);
+    table->field[1]->store((ulonglong) 0, 1); // this initialize maybe not need.
   }
   else
   {
@@ -235,14 +235,14 @@ int select_unit::send_data(List<Item> &values)
       int find_res;
       if(!is_distinct)
       {
-        if (!(find_res= table->file->find_unique_row(table->record[0], 0)))
+        if (!(find_res= table->file->find_unique_row(table->record[0], 0))) // found
         {
-          if(table->field[0]->val_int() <= 1)
+          if(table->field[0]->val_int() <= 1) // need to delete this record
           {
             table->status|= STATUS_DELETED;
             not_reported_error= table->file->ha_delete_tmp_row(table->record[0]);
           }
-          else
+          else // decrease counter by 1
           {
             store_record(table, record[1]);
             table->field[0]->store(table->field[0]->val_int()- 1, 0);
@@ -253,6 +253,13 @@ int select_unit::send_data(List<Item> &values)
           rc= MY_TEST(not_reported_error);
           goto end;
         }
+        else
+        {
+          // not found, need not process.
+          rc = 0;
+          goto end;
+        }
+        
       }
       /*
         The temporary table uses very first index or constrain for
@@ -276,20 +283,38 @@ int select_unit::send_data(List<Item> &values)
     case INTERSECT_TYPE:
     {
       int find_res;
+
+      if(!is_distinct)
+      {
+        if (!(find_res= table->file->find_unique_row(table->record[0], 0))) // found, increase `intersect_counter` by 1
+        {
+          store_record(table, record[1]);
+          table->field[1]->store(table->field[1]->val_int() + 1, 0);
+          not_reported_error|= table->file->ha_update_tmp_row(table->record[1],
+                                                              table->record[0]);
+          
+          DBUG_ASSERT(!table->triggers);
+          rc= MY_TEST(not_reported_error);
+          goto end;
+        }
+        else
+        {
+          // not found, need not process.
+          rc = 0;
+          goto end;
+        }
+      }
+
       /*
         The temporary table uses very first index or constrain for
         checking unique constrain.
       */
       if (!(find_res= table->file->find_unique_row(table->record[0], 0)))
       {
-        DBUG_ASSERT(!table->triggers);
-        if (table->field[1]->val_int() != prev_step)
-        {
-          rc= 0;
-          goto end;
-        }
+        // found. set `intersect_counter` to 1.
+        // other records' `intersect_counter` should be 0 and will be deleted in send_eof().
         store_record(table, record[1]);
-        table->field[1]->store(curr_step, 0);
+        table->field[1]->store(1, 0);
         not_reported_error= table->file->ha_update_tmp_row(table->record[1],
                                                             table->record[0]);
         rc= MY_TEST(not_reported_error);
@@ -319,6 +344,80 @@ end:
 
 bool select_unit::send_eof()
 {
+  handler *file= table->file;
+  int error;
+
+  // take minimal between `counter` and `intersect_counter` for INTERSECT
+  if (step == INTERSECT_TYPE)
+  {
+    if (unlikely(file->ha_rnd_init_with_error(1)))
+      return 1;
+    do
+    {
+      if (unlikely(error= file->ha_rnd_next(table->record[0])))
+      {
+        if (error == HA_ERR_END_OF_FILE)
+        {
+          error= 0;
+          break;
+        }
+        break;
+      }
+      if (table->field[0]->val_int() > table->field[1]->val_int())
+      {
+        store_record(table, record[1]);
+        table->field[0]->store(table->field[1]->val_int(), 0);
+        error= table->file->ha_update_tmp_row(table->record[1],
+                                              table->record[0]);
+      }
+    } while (likely(!error));
+    file->ha_rnd_end();
+  }
+
+  // delete record first
+  if (unlikely(file->ha_rnd_init_with_error(1)))
+    return 1;
+  do
+  {
+    if (unlikely(error= file->ha_rnd_next(table->record[0])))
+    {
+      if (error == HA_ERR_END_OF_FILE)
+      {
+        error= 0;
+        break;
+      }
+      break;
+    }
+    if (table->field[0]->val_int() == 0)
+      error= file->ha_delete_tmp_row(table->record[0]);
+  } while (likely(!error));
+  file->ha_rnd_end();
+
+  // initiate `intersect_count` to 0 for intersect
+  if (thd->lex->current_select->next_select() &&
+       thd->lex->current_select->next_select()->get_linkage() == INTERSECT_TYPE)
+  {
+    if (unlikely(file->ha_rnd_init_with_error(1)))
+      return 1;
+    do
+    {
+      if (unlikely(error= file->ha_rnd_next(table->record[0])))
+      {
+        if (error == HA_ERR_END_OF_FILE)
+        {
+          error= 0;
+          break;
+        }
+        break;
+      }
+      store_record(table, record[1]);
+      table->field[1]->store((longlong)0, 0);
+      error= table->file->ha_update_tmp_row(table->record[1],
+                                            table->record[0]);
+    } while (likely(!error));
+    file->ha_rnd_end();
+  }
+
   if (step != INTERSECT_TYPE ||
       (thd->lex->current_select->next_select() &&
        thd->lex->current_select->next_select()->get_linkage() == INTERSECT_TYPE))
@@ -338,10 +437,10 @@ bool select_unit::send_eof()
    TODO: as optimization for simple case this could be moved to
    'fake_select' WHERE condition
   */
-  handler *file= table->file;
-  int error;
+  // handler *file= table->file;
+  // int error;
 
-  if (unlikely(file->ha_rnd_init_with_error(1)))
+  /*if (unlikely(file->ha_rnd_init_with_error(1)))
     return 1;
 
   do
@@ -358,7 +457,7 @@ bool select_unit::send_eof()
     if (table->field[1]->val_int() != curr_step)
       error= file->ha_delete_tmp_row(table->record[0]);
   } while (likely(!error));
-  file->ha_rnd_end();
+  file->ha_rnd_end();*/
 
   if (unlikely(error))
     table->file->print_error(error, MYF(0));
