@@ -84,6 +84,7 @@ void select_unit::change_select()
   }
   DBUG_VOID_RETURN;
 }
+
 /**
   Fill temporary tables for UNION/EXCEPT/INTERSECT
 
@@ -121,54 +122,28 @@ int select_unit::send_data(List<Item> &values)
   if (table->no_rows_with_nulls)
     table->null_catch_flags= CHECK_ROW_FOR_NULLS_TO_REJECT;
 
-  // try to process
-  /*
-  uchar *item;
-  List_iterator_fast<Item> it(values);
-  if(!is_distinct){
-    switch (step){
-      case EXCEPT_TYPE:
-        int find_res;
-        while ((item= (uchar*) it++))
-        {
-          find_res = table->file->find_unique_row(item, 0);
-          if(find_res)
-          {
-            not_reported_error= table->file->ha_delete_tmp_row(item);
-            rc= MY_TEST(not_reported_error);
-            goto end;
-          }
-        }
-        
-        rc = 0;
-        goto end;
-      default:
-        while((item= (uchar*) it++))
-        {
-          if(unlikely((write_err=
-                    table->file->ha_write_tmp_row(item))))
-          {
-            //foo
-          }
-        }
-        rc = 0;
-        goto end;
-    }
-  }*/
-
-  if (intersect_mark)
+  if (intersect_mark && duplicate_cnt)
   {
     fill_record(thd, table, table->field + 1 + 1, values, TRUE, FALSE);
+    table->field[0]->store((ulonglong) 1, 1); // duplicate counter initiate to 1
+    table->field[1]->store((ulonglong) 0, 1); // intersect counter initiate to 0
+  }
+  else if(duplicate_cnt)
+  {
+    fill_record(thd, table, table->field + 1, values, TRUE, FALSE);
     table->field[0]->store((ulonglong) 1, 1);
-    //fill_record(thd, table, table->field + 1, values, TRUE, FALSE);
-    table->field[1]->store((ulonglong) 0, 1); // this initialize maybe not need.
+  }
+  else if(!duplicate_cnt && !intersect_mark)
+  {
+    DBUG_ASSERT(step == UNION_TYPE); // other operations that not belong to set operation.
+    fill_record(thd, table, table->field, values, TRUE, FALSE);
   }
   else
   {
-    fill_record(thd, table, table->field + 1, values, TRUE, FALSE);
-    //fill_record(thd, table, table->field, values, TRUE, FALSE);
-    table->field[0]->store((ulonglong) 1, 1);
+    rc = 1;
+    goto end;
   }
+
   if (unlikely(thd->is_error()))
   {
     rc= 1;
@@ -190,7 +165,7 @@ int select_unit::send_data(List<Item> &values)
     case UNION_TYPE:
     {
       int find_res;
-      if (!(find_res= table->file->find_unique_row(table->record[0], 0)))
+      if (!is_distinct && !(find_res= table->file->find_unique_row(table->record[0], 0)))
       {
         store_record(table, record[1]);
         table->field[0]->store(table->field[0]->val_int()+ 1, 0);
@@ -721,7 +696,7 @@ int select_union_direct::send_data(List<Item> &items)
   }
 
   send_records++;
-  fill_record(thd, table, table->field, items, true, false);
+  fill_record(thd, table, table->field + 1, items, true, false);
   if (unlikely(thd->is_error()))
     return true; /* purecov: inspected */
 
@@ -1347,7 +1322,16 @@ cont:
       // add duplicate_count
       if (!duplicate_cnt)
       {
+        Query_arena *arena, backup_arena;
+        arena= thd->activate_stmt_arena_if_needed(&backup_arena);
+
         duplicate_cnt= new (thd->mem_root) Item_int(thd, 0);
+
+        if (arena)
+          thd->restore_active_arena(arena, &backup_arena);
+
+        if (!duplicate_cnt)
+          goto err;
       }
       else
       {
