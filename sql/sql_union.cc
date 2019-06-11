@@ -349,24 +349,33 @@ bool select_unit::send_eof()
     file->ha_rnd_end();
   }
 
-  // delete record first
-  if (unlikely(file->ha_rnd_init_with_error(1)))
-    return 1;
-  do
+  // delete record first if this is a set operation
+  if(duplicate_cnt)
   {
-    if (unlikely(error= file->ha_rnd_next(table->record[0])))
+    if (unlikely(file->ha_rnd_init_with_error(1)))
+      return 1;
+    do
     {
-      if (error == HA_ERR_END_OF_FILE)
+      if (unlikely(error= file->ha_rnd_next(table->record[0])))
       {
-        error= 0;
+        if (error == HA_ERR_END_OF_FILE)
+        {
+          error= 0;
+          break;
+        }
         break;
       }
-      break;
-    }
-    if (table->field[0]->val_int() == 0)
-      error= file->ha_delete_tmp_row(table->record[0]);
-  } while (likely(!error));
-  file->ha_rnd_end();
+      if (table->field[0]->val_int() == 0)
+        error= file->ha_delete_tmp_row(table->record[0]);
+    } while (likely(!error));
+    file->ha_rnd_end();
+  }
+  else
+  {
+    DBUG_ASSERT(step == UNION_TYPE);
+  }
+  
+  
 
   // initiate `intersect_count` to 0 for intersect
   if (thd->lex->current_select->next_select() &&
@@ -516,9 +525,8 @@ select_unit::create_result_table(THD *thd_arg, List<Item> *column_types,
   tmp_table_param.field_count= column_types->elements;
   tmp_table_param.bit_fields_as_long= bit_fields_as_long;
   tmp_table_param.hidden_field_count= hidden;
-  //tmp_table_param.hidden_field_count= 1;
 
-  is_union_distinct = true;
+  if(hidden > 0) is_union_distinct = true;
   if (! (table= create_tmp_table(thd_arg, &tmp_table_param, *column_types,
                                  (ORDER*) 0, is_union_distinct, 1,
                                  options, HA_POS_ERROR, alias,
