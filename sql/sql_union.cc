@@ -172,37 +172,35 @@ int select_unit::send_data(List<Item> &values)
         not_reported_error|= table->file->ha_update_tmp_row(table->record[1],
                                                             table->record[0]);
       }
-      else
-        if (unlikely((write_err=
-                      table->file->ha_write_tmp_row(table->record[0]))))
+      else if (unlikely((write_err= table->file->ha_write_tmp_row(table->record[0]))))
+      {
+        if (write_err == HA_ERR_FOUND_DUPP_KEY)
         {
-          if (write_err == HA_ERR_FOUND_DUPP_KEY)
-          {
-            /*
-              Inform upper level that we found a duplicate key, that should not
-              be counted as part of limit
-            */
-            rc= -1;
-            goto end;
-          }
-          bool is_duplicate= FALSE;
-          /* create_internal_tmp_table_from_heap will generate error if needed */
-          if (table->file->is_fatal_error(write_err, HA_CHECK_DUP) &&
-              create_internal_tmp_table_from_heap(thd, table,
-                                                  tmp_table_param.start_recinfo,
-                                                  &tmp_table_param.recinfo,
-                                                  write_err, 1, &is_duplicate))
-          {
-            rc= 1;
-            goto end;
-          }
-
-          if (is_duplicate)
-          {
-            rc= -1;
-            goto end;
-          }
+          /*
+            Inform upper level that we found a duplicate key, that should not
+            be counted as part of limit
+          */
+          rc= -1;
+          goto end;
         }
+        bool is_duplicate= FALSE;
+        /* create_internal_tmp_table_from_heap will generate error if needed */
+        if (table->file->is_fatal_error(write_err, HA_CHECK_DUP) &&
+            create_internal_tmp_table_from_heap(thd, table,
+                                                tmp_table_param.start_recinfo,
+                                                &tmp_table_param.recinfo,
+                                                write_err, 1, &is_duplicate))
+        {
+          rc= 1;
+          goto end;
+        }
+
+        if (is_duplicate)
+        {
+          rc= -1;
+          goto end;
+        }
+      }
       break;
     }
     case EXCEPT_TYPE:
@@ -1697,10 +1695,11 @@ bool st_select_lex_unit::exec()
           sl->tvc->exec(sl);
         else
           sl->join->exec();
-              if (sl == union_distinct && !(with_element && with_element->is_recursive))
+        // disable this block which will cause error
+        if (sl == union_distinct && !(with_element && with_element->is_recursive) && 0)
         {
-                // This is UNION DISTINCT, so there should be a fake_select_lex
-                DBUG_ASSERT(fake_select_lex != NULL);
+          // This is UNION DISTINCT, so there should be a fake_select_lex
+          DBUG_ASSERT(fake_select_lex != NULL);
           if (unlikely(table->file->ha_disable_indexes(HA_KEY_SWITCH_ALL)))
             DBUG_RETURN(TRUE);
           table->no_keyread=1;
