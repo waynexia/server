@@ -365,6 +365,13 @@ bool select_unit::send_eof()
       }
       if (table->field[0]->val_int() == 0)
         error= file->ha_delete_tmp_row(table->record[0]);
+      else if(is_distinct)
+      {
+        store_record(table, record[1]);
+        table->field[0]->store(1, 0);
+        error= table->file->ha_update_tmp_row(table->record[1],
+                                              table->record[0]);
+      }
     } while (likely(!error));
     file->ha_rnd_end();
   }
@@ -373,11 +380,10 @@ bool select_unit::send_eof()
     DBUG_ASSERT(step == UNION_TYPE);
   }
   
-  
-
   // initiate `intersect_count` to 0 for intersect
   if (thd->lex->current_select->next_select() &&
-       thd->lex->current_select->next_select()->get_linkage() == INTERSECT_TYPE)
+       thd->lex->current_select->next_select()->get_linkage() == INTERSECT_TYPE &&
+       intersect_mark)
   {
     if (unlikely(file->ha_rnd_init_with_error(1)))
       return 1;
@@ -396,6 +402,50 @@ bool select_unit::send_eof()
       table->field[1]->store((longlong)0, 0);
       error= table->file->ha_update_tmp_row(table->record[1],
                                             table->record[0]);
+    } while (likely(!error));
+    file->ha_rnd_end();
+  }
+
+  // unfold in the end
+  if( duplicate_cnt && (! thd->lex->current_select->next_select() ||
+      (thd->lex->current_select->next_select() && 
+      ! thd->lex->current_select->next_select()->is_linkage_set())))
+  {
+    // table->file->extra(HA_EXTRA_IGNORE_DUP_KEY);
+    // table->distinct = false;
+    // table->used_for_duplicate_elimination = false;
+    table->file->ha_disable_indexes(HA_KEY_SWITCH_ALL); // disable index to insert duplicate records
+    int dup_cnt; // temporary variable to store `table->field[0]`
+    if (unlikely(file->ha_rnd_init_with_error(1)))
+      return 1;
+    do
+    {
+      if (unlikely(error= file->ha_rnd_next(table->record[0])))
+      {
+        if (error == HA_ERR_END_OF_FILE)
+        {
+          error= 0;
+          break;
+        }
+        break;
+      }
+      dup_cnt = table->field[0]->val_int();
+      store_record(table, record[1]);
+      table->field[0]->store((longlong)1, 0);
+      error= table->file->ha_update_tmp_row(table->record[1],
+                                            table->record[0]);
+      for(int _cnt = 1; _cnt <= dup_cnt -1; ++_cnt)
+      {
+        if(likely((table->file->ha_write_tmp_row(table->record[0]))))
+        {
+          error = 1;
+          break;
+        }
+      }
+      /*store_record(table, record[1]);
+      table->field[0]->store((longlong)1, 0);
+      error= table->file->ha_update_tmp_row(table->record[1],
+                                            table->record[0]);*/
     } while (likely(!error));
     file->ha_rnd_end();
   }
