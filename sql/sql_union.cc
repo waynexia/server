@@ -1691,6 +1691,12 @@ bool st_select_lex_unit::exec()
   {
     if (!fake_select_lex && !(with_element && with_element->is_recursive))
       union_result->cleanup();
+    /*
+      the first unit is not the first one in SQL sentence.
+      hard set it to false to avoid error.
+      maybe it could be move to some other suitable place.
+    */
+    select_cursor->distinct = false;
     for (SELECT_LEX *sl= select_cursor; sl; sl= sl->next_select())
     {
       ha_rows records_at_start= 0;
