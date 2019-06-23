@@ -9,11 +9,10 @@ select * from t1 except all select * from t2;
 select * from ((select * from t1) except all (select * from t2)) a;
 select * from ((select a from t1) except all (select c from t2)) a;
 
-# incorrect: explain will cause assertion fail now
-# EXPLAIN select * from t1 except all select * from t2;
-# EXPLAIN format=json select * from t1 except all select * from t2;
-# EXPLAIN extended (select * from t1) except all (select * from t2);
-# EXPLAIN extended select * from ((select * from t1) except all (select * from t2)) a;
+EXPLAIN select * from t1 except all select * from t2;
+EXPLAIN format=json select * from t1 except all select * from t2;
+EXPLAIN extended (select * from t1) except all (select * from t2);
+EXPLAIN extended select * from ((select * from t1) except all (select * from t2)) a;
 
 --replace_regex /"r_total_time_ms": [0-9e\.\-+]*,/"r_total_time_ms": "REPLACED",/
 ANALYZE format=json select * from ((select a,b from t1) except all (select c,d from t2)) a;
@@ -45,11 +44,10 @@ select * from ((select a,b,e,f from t1,t3) except all (select c,d,g,h from t2,t4
 (select * from t1,t3) except all (select * from t2,t4);
 (select a,b,e from t1,t3) except all (select c,d,g from t2,t4);
 
-# incorrect: explain will cause assertion fail now
-# EXPLAIN (select a,b,e,f from t1,t3) except all (select c,d,g,h from t2,t4);
-# EXPLAIN select * from ((select a,b,e,f from t1,t3) except all (select c,d,g,h from t2,t4)) t;
-# EXPLAIN extended select * from ((select a,b,e,f from t1,t3) except all (select c,d,g,h from t2,t4)) t;
-# EXPLAIN format=json select * from ((select a,b,e,f from t1,t3) except all (select c,d,g,h from t2,t4)) t;
+EXPLAIN (select a,b,e,f from t1,t3) except all (select c,d,g,h from t2,t4);
+EXPLAIN select * from ((select a,b,e,f from t1,t3) except all (select c,d,g,h from t2,t4)) t;
+EXPLAIN extended select * from ((select a,b,e,f from t1,t3) except all (select c,d,g,h from t2,t4)) t;
+EXPLAIN format=json select * from ((select a,b,e,f from t1,t3) except all (select c,d,g,h from t2,t4)) t;
 
 --replace_regex /"r_total_time_ms": [0-9e\.\-+]*,/"r_total_time_ms": "REPLACED",/
 ANALYZE format=json (select a,b,e,f from t1,t3) except all (select c,d,g,h from t2,t4);

@@ -3000,9 +3000,13 @@ void st_select_lex_unit::print(String *str, enum_query_type query_type)
         break;
       case INTERSECT_TYPE:
         str->append(STRING_WITH_LEN(" intersect "));
+        if (!sl->distinct)
+          str->append(STRING_WITH_LEN("all "));
         break;
       case EXCEPT_TYPE:
         str->append(STRING_WITH_LEN(" except "));
+        if (!sl->distinct)
+          str->append(STRING_WITH_LEN("all "));
         break;
       }
       if (sl == union_distinct)
@@ -3520,6 +3524,8 @@ bool st_select_lex_unit::union_needs_tmp_table()
         with_wrapped_tvc= true;
         break;
       }
+      if (sl->linkage != UNION_TYPE)
+        return true;
     }
   }
   if (with_wrapped_tvc)
