@@ -411,9 +411,6 @@ bool select_unit::send_eof()
       (thd->lex->current_select->next_select() && 
       ! thd->lex->current_select->next_select()->is_linkage_set())))
   {
-    // table->file->extra(HA_EXTRA_IGNORE_DUP_KEY);
-    // table->distinct = false;
-    // table->used_for_duplicate_elimination = false;
     table->file->ha_disable_indexes(HA_KEY_SWITCH_ALL); // disable index to insert duplicate records
     int dup_cnt; // temporary variable to store `table->field[0]`
     if (unlikely(file->ha_rnd_init_with_error(1)))
@@ -442,10 +439,6 @@ bool select_unit::send_eof()
           break;
         }
       }
-      /*store_record(table, record[1]);
-      table->field[0]->store((longlong)1, 0);
-      error= table->file->ha_update_tmp_row(table->record[1],
-                                            table->record[0]);*/
     } while (likely(!error));
     file->ha_rnd_end();
   }
@@ -469,28 +462,6 @@ bool select_unit::send_eof()
    TODO: as optimization for simple case this could be moved to
    'fake_select' WHERE condition
   */
-  // handler *file= table->file;
-  // int error;
-
-  /*if (unlikely(file->ha_rnd_init_with_error(1)))
-    return 1;
-
-  do
-  {
-    if (unlikely(error= file->ha_rnd_next(table->record[0])))
-    {
-      if (error == HA_ERR_END_OF_FILE)
-      {
-        error= 0;
-        break;
-      }
-      break;
-    }
-    if (table->field[1]->val_int() != curr_step)
-      error= file->ha_delete_tmp_row(table->record[0]);
-  } while (likely(!error));
-  file->ha_rnd_end();*/
-
   if (unlikely(error))
     table->file->print_error(error, MYF(0));
 
