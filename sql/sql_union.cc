@@ -122,26 +122,26 @@ int select_unit::send_data(List<Item> &values)
   if (table->no_rows_with_nulls)
     table->null_catch_flags= CHECK_ROW_FOR_NULLS_TO_REJECT;
 
+  // initiate extra util field
   if (intersect_mark && duplicate_cnt)
   {
     fill_record(thd, table, table->field + 1 + 1, values, TRUE, FALSE);
     table->field[0]->store((ulonglong) 1, 1); // duplicate counter initiate to 1
     table->field[1]->store((ulonglong) 0, 1); // intersect counter initiate to 0
   }
-  else if(duplicate_cnt)
+  else if(duplicate_cnt && !intersect_mark)
   {
     fill_record(thd, table, table->field + 1, values, TRUE, FALSE);
     table->field[0]->store((ulonglong) 1, 1);
   }
+  else if(intersect_mark && !duplicate_cnt)
+  {
+    fill_record(thd, table, table->field + 1, values, TRUE, FALSE);
+    table->field[0]->store((ulonglong) curr_step, 1);
+  }
   else if(!duplicate_cnt && !intersect_mark)
   {
-    DBUG_ASSERT(step == UNION_TYPE); // other operations that not belong to set operation.
     fill_record(thd, table, table->field, values, TRUE, FALSE);
-  }
-  else
-  {
-    rc = 1;
-    goto end;
   }
 
   if (unlikely(thd->is_error()))
@@ -165,7 +165,7 @@ int select_unit::send_data(List<Item> &values)
     case UNION_TYPE:
     {
       int find_res;
-      if (!is_distinct && !(find_res= table->file->find_unique_row(table->record[0], 0)))
+      if (duplicate_cnt && !is_distinct && !(find_res= table->file->find_unique_row(table->record[0], 0)))
       {
         store_record(table, record[1]);
         table->field[0]->store(table->field[0]->val_int()+ 1, 0);
@@ -206,7 +206,7 @@ int select_unit::send_data(List<Item> &values)
     case EXCEPT_TYPE:
     {
       int find_res;
-      if(!is_distinct)
+      if(duplicate_cnt && !is_distinct)
       {
         if (!(find_res= table->file->find_unique_row(table->record[0], 0))) // found
         {
@@ -232,7 +232,6 @@ int select_unit::send_data(List<Item> &values)
           rc = 0;
           goto end;
         }
-        
       }
       /*
         The temporary table uses very first index or constrain for
@@ -256,50 +255,81 @@ int select_unit::send_data(List<Item> &values)
     case INTERSECT_TYPE:
     {
       int find_res;
-
-      if(!is_distinct)
+      if(duplicate_cnt)
       {
-        if (!(find_res= table->file->find_unique_row(table->record[0], 0))) // found, increase `intersect_counter` by 1
+        if(!is_distinct)
         {
+          if (!(find_res= table->file->find_unique_row(table->record[0], 0))) // found, increase `intersect_counter` by 1
+          {
+            store_record(table, record[1]);
+            table->field[1]->store(table->field[1]->val_int() + 1, 0);
+            not_reported_error|= table->file->ha_update_tmp_row(table->record[1],
+                                                                table->record[0]);
+            
+            DBUG_ASSERT(!table->triggers);
+            rc= MY_TEST(not_reported_error);
+            goto end;
+          }
+          else
+          {
+            // not found, need not process.
+            rc = 0;
+            goto end;
+          }
+        }
+        /*
+          The temporary table uses very first index or constrain for
+          checking unique constrain.
+        */
+        if (!(find_res= table->file->find_unique_row(table->record[0], 0)))
+        {
+          // found. set `intersect_counter` to 1.
+          // other records' `intersect_counter` should be 0 and will be deleted in send_eof().
           store_record(table, record[1]);
-          table->field[1]->store(table->field[1]->val_int() + 1, 0);
-          not_reported_error|= table->file->ha_update_tmp_row(table->record[1],
+          table->field[1]->store(1, 0);
+          not_reported_error= table->file->ha_update_tmp_row(table->record[1],
                                                               table->record[0]);
-          
-          DBUG_ASSERT(!table->triggers);
           rc= MY_TEST(not_reported_error);
+          DBUG_ASSERT(rc != HA_ERR_RECORD_IS_THE_SAME);
           goto end;
         }
         else
         {
-          // not found, need not process.
-          rc = 0;
-          goto end;
+          if ((rc= not_reported_error= (find_res != 1)))
+            goto end;
         }
+        break;
       }
-
-      /*
-        The temporary table uses very first index or constrain for
-        checking unique constrain.
-      */
-      if (!(find_res= table->file->find_unique_row(table->record[0], 0)))
-      {
-        // found. set `intersect_counter` to 1.
-        // other records' `intersect_counter` should be 0 and will be deleted in send_eof().
-        store_record(table, record[1]);
-        table->field[1]->store(1, 0);
-        not_reported_error= table->file->ha_update_tmp_row(table->record[1],
-                                                            table->record[0]);
-        rc= MY_TEST(not_reported_error);
-        DBUG_ASSERT(rc != HA_ERR_RECORD_IS_THE_SAME);
-        goto end;
-      }
+      
       else
       {
-        if ((rc= not_reported_error= (find_res != 1)))
+        /*
+          The temporary table uses very first index or constrain for
+          checking unique constrain.
+        */
+        if (!(find_res= table->file->find_unique_row(table->record[0], 0)))
+        {
+          DBUG_ASSERT(!table->triggers);
+          if (table->field[0]->val_int() != prev_step)
+          {
+            rc= 0;
+            goto end;
+          }
+          store_record(table, record[1]);
+          table->field[0]->store(curr_step, 0);
+          not_reported_error= table->file->ha_update_tmp_row(table->record[1],
+                                                              table->record[0]);
+          rc= MY_TEST(not_reported_error);
+          DBUG_ASSERT(rc != HA_ERR_RECORD_IS_THE_SAME);
           goto end;
+        }
+        else
+        {
+          if ((rc= not_reported_error= (find_res != 1)))
+            goto end;
+        }
+        break;
       }
-      break;
     }
     default:
       DBUG_ASSERT(0);
@@ -319,6 +349,61 @@ bool select_unit::send_eof()
 {
   handler *file= table->file;
   int error;
+
+  if(!duplicate_cnt)
+  {
+    if (step != INTERSECT_TYPE ||
+    (thd->lex->current_select->next_select() &&
+    thd->lex->current_select->next_select()->get_linkage() == INTERSECT_TYPE))
+    {
+      /*
+        it is not INTESECT or next SELECT in the sequence is INTERSECT so no
+        need filtering (the last INTERSECT in this sequence of intersects will
+        filter).
+      */
+      return 0;
+    }
+
+    /*
+      It is last select in the sequence of INTERSECTs so we should filter out
+      all records except marked with actual counter.
+
+    TODO: as optimization for simple case this could be moved to
+    'fake_select' WHERE condition
+    */
+    handler *file= table->file;
+    int error;
+
+    if (file->ha_rnd_init_with_error(1))
+      return 1;
+
+    do
+    {
+      error= file->ha_rnd_next(table->record[0]);
+      if (error)
+      {
+        if (error == HA_ERR_END_OF_FILE)
+        {
+          error= 0;
+          break;
+        }
+        if (unlikely(error == HA_ERR_RECORD_DELETED))
+        {
+          error= 0;
+          continue;
+        }
+        break;
+      }
+      if (table->field[0]->val_int() != curr_step)
+        error= file->ha_delete_tmp_row(table->record[0]);
+    } while (!error);
+    file->ha_rnd_end();
+
+    if (unlikely(error))
+    table->file->print_error(error, MYF(0));
+
+    return(MY_TEST(error));
+  }
 
   // take minimal between `counter` and `intersect_counter` for INTERSECT
   if (step == INTERSECT_TYPE)
@@ -443,25 +528,6 @@ bool select_unit::send_eof()
     file->ha_rnd_end();
   }
 
-  if (step != INTERSECT_TYPE ||
-      (thd->lex->current_select->next_select() &&
-       thd->lex->current_select->next_select()->get_linkage() == INTERSECT_TYPE))
-  {
-    /*
-      it is not INTESECT or next SELECT in the sequence is INTERSECT so no
-      need filtering (the last INTERSECT in this sequence of intersects will
-      filter).
-    */
-    return 0;
-  }
-
-  /*
-    It is last select in the sequence of INTERSECTs so we should filter out
-    all records except marked with actual counter.
-
-   TODO: as optimization for simple case this could be moved to
-   'fake_select' WHERE condition
-  */
   if (unlikely(error))
     table->file->print_error(error, MYF(0));
 
@@ -1006,7 +1072,7 @@ bool st_select_lex_unit::prepare(TABLE_LIST *derived_arg,
   uint union_part_count= 0;
   select_result *tmp_result;
   bool is_union_select;
-  bool have_except= FALSE, have_intersect= FALSE;
+  bool have_except= FALSE, have_intersect= FALSE, have_all= FALSE;
   bool instantiate_tmp_table= false;
   bool single_tvc= !first_sl->next_select() && first_sl->tvc &&
                    !fake_select_lex;
@@ -1085,6 +1151,9 @@ bool st_select_lex_unit::prepare(TABLE_LIST *derived_arg,
 
   for (SELECT_LEX *s= first_sl; s; s= s->next_select())
   {
+    if(!s->distinct){
+      have_all = TRUE;
+    }
     switch (s->linkage)
     {
     case INTERSECT_TYPE:
@@ -1345,32 +1414,36 @@ cont:
 
     if (!is_recursive)
     {
-      uint hidden= 1;
-      // add duplicate_count
-      if (!duplicate_cnt)
+      uint hidden= 0;
+      if(have_all)
       {
-        Query_arena *arena, backup_arena;
-        arena= thd->activate_stmt_arena_if_needed(&backup_arena);
-
-        duplicate_cnt= new (thd->mem_root) Item_int(thd, 0);
-
-        if (arena)
-          thd->restore_active_arena(arena, &backup_arena);
-
+        // add duplicate_count
+        ++hidden;
         if (!duplicate_cnt)
-          goto err;
+        {
+          Query_arena *arena, backup_arena;
+          arena= thd->activate_stmt_arena_if_needed(&backup_arena);
+
+          duplicate_cnt= new (thd->mem_root) Item_int(thd, 0);
+
+          if (arena)
+            thd->restore_active_arena(arena, &backup_arena);
+
+          if (!duplicate_cnt)
+            goto err;
+        }
+        else
+        {
+          duplicate_cnt->value= 0;
+        }
+        types.push_front(union_result->duplicate_cnt= duplicate_cnt);
+        union_result->duplicate_cnt->name.str= "_DUP_CNT";
+        union_result->duplicate_cnt->name.length = 8;
       }
-      else
-      {
-        duplicate_cnt->value= 0;
-      }
-      types.push_front(union_result->duplicate_cnt= duplicate_cnt);
-      union_result->duplicate_cnt->name.str= "_DUP_CNT";
-      union_result->duplicate_cnt->name.length = 8;
       // add intersect_mark
       if (have_intersect)
       {
-        hidden= 2;
+        ++hidden;
         if (!intersect_mark)
         {
           /*
