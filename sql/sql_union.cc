@@ -789,7 +789,10 @@ int select_union_direct::send_data(List<Item> &items)
   }
 
   send_records++;
-  fill_record(thd, table, table->field + 1, items, true, false);
+  if(duplicate_cnt)
+    fill_record(thd, table, table->field + 1, items, true, false);
+  else
+    fill_record(thd, table, table->field, items, true, false);
   if (unlikely(thd->is_error()))
     return true; /* purecov: inspected */
 
