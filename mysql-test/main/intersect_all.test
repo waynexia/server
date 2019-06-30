@@ -203,9 +203,6 @@ show create view v1;
 drop view v1;
 drop tables t1,t2,t3;
 
---echo # 
---echo # MDEV-14346:incorrect result of intersect with ANY/ALL/IN subquery
---echo # 
 CREATE TABLE t (i INT);
 INSERT INTO t VALUES (1),(2);
 SELECT * FROM t WHERE i != ANY ( SELECT 6 INTERSECT ALL SELECT 3 );
@@ -216,11 +213,6 @@ select i from t where
            (select 3 from dual having t.i <> 3));
 
 drop table t;
-
---echo #
---echo # MDEV-13749: Server crashes in _ma_unique_hash /
---echo # JOIN_CACHE::generate_full_extensions on INTERSECT
---echo #
 
 CREATE TABLE t1 (a varchar(32)) ENGINE=MyISAM;
 INSERT INTO t1 VALUES
@@ -310,11 +302,6 @@ select count(*) from (
 
 drop table t1,t2,t3;
 
---echo #
---echo # MDEV-13695: INTERSECT precedence is not in line with Oracle even
---echo # in SQL_MODE=Oracle
---echo #
-
 create table t12(c1 int);
 insert into t12 values(1);
 insert into t12 values(2);
@@ -334,10 +321,6 @@ set SQL_MODE=default;
 select * from t13 union select * from t234 intersect all select * from t12;
 
 drop table t12,t13,t234;
-
---echo #
---echo # MDEV-18701: Wrong result from query that uses INTERSECT after UNION ALL
---echo #
 
 create table t1 (a int);
 insert into t1 values (3), (1), (7), (3), (2), (7), (4);

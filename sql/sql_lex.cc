@@ -3524,7 +3524,7 @@ bool st_select_lex_unit::union_needs_tmp_table()
         with_wrapped_tvc= true;
         break;
       }
-      if (sl->linkage != UNION_TYPE)
+      if (sl != first_select() && sl->linkage != UNION_TYPE)
         return true;
     }
   }

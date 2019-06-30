@@ -332,7 +332,7 @@ insert into t2 values (4), (5), (9), (1), (8), (9);
 create table t3 (a int);
 insert into t3 values (8), (1), (8), (2), (3), (7), (2);
 
-
+--sorted_result
 select * from t1 where a > 4
 union all 
 select * from t2 where a < 5
