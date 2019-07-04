@@ -1152,6 +1152,98 @@ bool st_select_lex_unit::prepare(TABLE_LIST *derived_arg,
   found_rows_for_union= first_sl->options & OPTION_FOUND_ROWS;
   is_union_select= is_unit_op() || fake_select_lex || single_tvc;
 
+  /*
+    simplify set operation sequence with following rules
+    (1) If there is one INTERSECT DISTINCT then all INTERSECT ALL 
+        can be converted into INTERSECT DISTINCT.
+    (2) If a sequence of INTERSECT is followed by UNION/EXCEPT ALL
+        then this sequence can be converted into INTERSECT DISTINCT 
+    (3) If last one is DISTINCT then EXCEPT ALL can be converted to DISTINCT
+    (4) If a sequence have no EXCEPT and end with UNION DISTINCT then all
+        UNION ALL can be converted to UNION DISTINCT
+   */
+  bool have_intersect_discinct = FALSE,
+    is_last_distinct = FALSE; // mark last node is distinct or not
+  SELECT_LEX *last_union_distinct = NULL, *last_except = NULL, // for rule 4
+    *begin_of_intersect_sequence = NULL; // for rule 2
+  for(SELECT_LEX *s= first_sl; s; s= s->next_select())
+  {
+    switch(s->linkage)
+    {
+    case INTERSECT_TYPE:
+      if(!begin_of_intersect_sequence)
+      {
+        begin_of_intersect_sequence = s;
+      }
+      if(s->distinct)
+      {
+        have_intersect_discinct = TRUE;
+      }
+      break;
+
+    case EXCEPT_TYPE:
+      if(is_last_distinct && !s->distinct)
+      {
+        s->distinct = TRUE;
+      }
+      if(last_union_distinct)
+      {
+        for(SELECT_LEX *node = last_except ? last_except->next_select() : first_sl;
+          node && node != last_union_distinct; node = node->next_select())
+        {
+          node->distinct = TRUE;
+        } 
+      }
+      if(s->distinct && begin_of_intersect_sequence)
+      {
+        for(SELECT_LEX *node = begin_of_intersect_sequence;
+          node && node != s;node = node->next_select())
+        {
+          node->distinct = TRUE;
+        }
+      }
+      last_except = s;
+      last_union_distinct = NULL;
+      begin_of_intersect_sequence = NULL;
+      break;
+
+    case UNION_TYPE:
+      if(s->distinct)
+      {
+        last_union_distinct = s;
+        if(begin_of_intersect_sequence)
+        {
+          for(SELECT_LEX *node = begin_of_intersect_sequence;
+            node && node != s;node = node->next_select())
+          {
+            node->distinct = TRUE;
+          }
+        }
+      }
+      begin_of_intersect_sequence = NULL;
+      break;
+
+    default:
+      break;
+    }
+    if(s->linkage >= 1 && s->linkage <= 3)
+      is_last_distinct = s->distinct;
+  }
+  *last_union_distinct = NULL, *last_except = NULL;
+  *begin_of_intersect_sequence = NULL;
+
+  //convert intersect if need
+  if(have_intersect_discinct)
+  {
+    for(SELECT_LEX *s= first_sl; s; s= s->next_select())
+    {
+      if(s->linkage == INTERSECT_TYPE && !s->distinct)
+      {
+        s->distinct = TRUE;
+      }
+    }
+  }
+
   for (SELECT_LEX *s= first_sl; s; s= s->next_select())
   {
     if(!s->distinct){
