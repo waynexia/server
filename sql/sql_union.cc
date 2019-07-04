@@ -1229,8 +1229,8 @@ bool st_select_lex_unit::prepare(TABLE_LIST *derived_arg,
     if(s->linkage >= 1 && s->linkage <= 3)
       is_last_distinct = s->distinct;
   }
-  *last_union_distinct = NULL, *last_except = NULL;
-  *begin_of_intersect_sequence = NULL;
+  last_union_distinct = NULL, last_except = NULL;
+  begin_of_intersect_sequence = NULL;
 
   //convert intersect if need
   if(have_intersect_discinct)
