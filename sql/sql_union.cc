@@ -1292,9 +1292,9 @@ bool st_select_lex_unit::prepare(TABLE_LIST *derived_arg,
           if (fake_select_lex->order_list.first ||
               fake_select_lex->explicit_limit)
           {
-            my_error(ER_NOT_SUPPORTED_YET, MYF(0),
-                          "global ORDER_BY/LIMIT in recursive CTE spec");
-            goto err;
+	    my_error(ER_NOT_SUPPORTED_YET, MYF(0),
+                     "global ORDER_BY/LIMIT in recursive CTE spec");
+	    goto err;
           }
           fake_select_lex->cleanup();
           fake_select_lex= NULL;
@@ -1315,7 +1315,7 @@ bool st_select_lex_unit::prepare(TABLE_LIST *derived_arg,
     if (sl->tvc)
     {
       if (sl->tvc->prepare(thd, sl, tmp_result, this))
-	      goto err;
+	goto err;
     }
     else if (prepare_join(thd, first_sl, tmp_result, additional_options,
                      is_union_select))
@@ -1852,15 +1852,15 @@ bool st_select_lex_unit::exec()
 
       {
         set_limit(sl);
-        if (sl == global_parameters() || describe)
-        {
-          offset_limit_cnt= 0;
-          /*
-            We can't use LIMIT at this stage if we are using ORDER BY for the
-            whole query
-          */
-          if (sl->order_list.first || describe)
-            select_limit_cnt= HA_POS_ERROR;
+	if (sl == global_parameters() || describe)
+	{
+	  offset_limit_cnt= 0;
+	  /*
+	    We can't use LIMIT at this stage if we are using ORDER BY for the
+	    whole query
+	  */
+	  if (sl->order_list.first || describe)
+	    select_limit_cnt= HA_POS_ERROR;
         }
 
         /*
@@ -1868,57 +1868,56 @@ bool st_select_lex_unit::exec()
           we don't calculate found_rows() per union part.
           Otherwise, SQL_CALC_FOUND_ROWS should be done on all sub parts.
         */
-        if (sl->tvc)
-        {
-          sl->tvc->select_options=
-                  (select_limit_cnt == HA_POS_ERROR || sl->braces) ?
-                  sl->options & ~OPTION_FOUND_ROWS : sl->options | found_rows_for_union;
-          saved_error= sl->tvc->optimize(thd);
-        }
-        else
-        {
-                sl->join->select_options= 
-                  (select_limit_cnt == HA_POS_ERROR || sl->braces) ?
-                  sl->options & ~OPTION_FOUND_ROWS : sl->options | found_rows_for_union;
-          saved_error= sl->join->optimize();
-        }
+	if (sl->tvc)
+	{
+	  sl->tvc->select_options=
+             (select_limit_cnt == HA_POS_ERROR || sl->braces) ?
+             sl->options & ~OPTION_FOUND_ROWS : sl->options | found_rows_for_union;
+	  saved_error= sl->tvc->optimize(thd);
+	}
+	else
+	{
+          sl->join->select_options= 
+            (select_limit_cnt == HA_POS_ERROR || sl->braces) ?
+            sl->options & ~OPTION_FOUND_ROWS : sl->options | found_rows_for_union;
+	  saved_error= sl->join->optimize();
+	}
       }
       if (likely(!saved_error))
       {
-        records_at_start= table->file->stats.records;
-        if (sl->tvc)
-          sl->tvc->exec(sl);
-        else
-          sl->join->exec();
-        // disable this block which will cause error
-        if (sl == union_distinct && !(with_element && with_element->is_recursive) && 0)
-        {
+	records_at_start= table->file->stats.records;
+	if (sl->tvc)
+	  sl->tvc->exec(sl);
+	else
+	  sl->join->exec();
+        if (sl == union_distinct && !(with_element && with_element->is_recursive))
+	{
           // This is UNION DISTINCT, so there should be a fake_select_lex
           DBUG_ASSERT(fake_select_lex != NULL);
-          if (unlikely(table->file->ha_disable_indexes(HA_KEY_SWITCH_ALL)))
-            DBUG_RETURN(TRUE);
-          table->no_keyread=1;
-        }
-        if (!sl->tvc)
-          saved_error= sl->join->error;
-        offset_limit_cnt= (ha_rows)(sl->offset_limit ?
-                                          sl->offset_limit->val_uint() :
-                                          0);
-        if (likely(!saved_error))
-        {
-          examined_rows+= thd->get_examined_row_count();
-                thd->set_examined_row_count(0);
-          if (union_result->flush())
-          {
-            thd->lex->current_select= lex_select_save;
-            DBUG_RETURN(1);
-          }
-        }
+	  if (unlikely(table->file->ha_disable_indexes(HA_KEY_SWITCH_ALL)))
+	    DBUG_RETURN(TRUE);
+	  table->no_keyread=1;
+	}
+	if (!sl->tvc)
+	  saved_error= sl->join->error;
+	offset_limit_cnt= (ha_rows)(sl->offset_limit ?
+                                    sl->offset_limit->val_uint() :
+                                    0);
+	if (likely(!saved_error))
+	{
+	  examined_rows+= thd->get_examined_row_count();
+          thd->set_examined_row_count(0);
+	  if (union_result->flush())
+	  {
+	    thd->lex->current_select= lex_select_save;
+	    DBUG_RETURN(1);
+	  }
+	}
       }
       if (unlikely(saved_error))
       {
-        thd->lex->current_select= lex_select_save;
-        DBUG_RETURN(saved_error);
+	thd->lex->current_select= lex_select_save;
+	DBUG_RETURN(saved_error);
       }
       if (fake_select_lex != NULL)
       {
@@ -1933,14 +1932,14 @@ bool st_select_lex_unit::exec()
       if (found_rows_for_union && !sl->braces && 
           select_limit_cnt != HA_POS_ERROR)
       {
-        /*
-          This is a union without braces. Remember the number of rows that
-          could also have been part of the result set.
-          We get this from the difference of between total number of possible
-          rows and actual rows added to the temporary table.
-        */
-        add_rows+= (ulonglong) (thd->limit_found_rows - (ulonglong)
-                  ((table->file->stats.records -  records_at_start)));
+	/*
+	  This is a union without braces. Remember the number of rows that
+	  could also have been part of the result set.
+	  We get this from the difference of between total number of possible
+	  rows and actual rows added to the temporary table.
+	*/
+	add_rows+= (ulonglong) (thd->limit_found_rows - (ulonglong)
+			      ((table->file->stats.records -  records_at_start)));
       }
       if (thd->killed == ABORT_QUERY)
       {
