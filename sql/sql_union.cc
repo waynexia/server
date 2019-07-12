@@ -1156,18 +1156,30 @@ bool st_select_lex_unit::prepare(TABLE_LIST *derived_arg,
     simplify set operation sequence with following rules
     (1) If there is one INTERSECT DISTINCT then all INTERSECT ALL 
         can be converted into INTERSECT DISTINCT.
-    (2) If a sequence of INTERSECT is followed by UNION/EXCEPT ALL
+    (2) If a sequence of INTERSECT is followed by UNION/EXCEPT DISTINCT
         then this sequence can be converted into INTERSECT DISTINCT 
-    (3) If last one is DISTINCT then EXCEPT ALL can be converted to DISTINCT
+    (3) If previous one is DISTINCT then EXCEPT ALL can be converted to DISTINCT
     (4) If a sequence have no EXCEPT and end with UNION DISTINCT then all
         UNION ALL can be converted to UNION DISTINCT
    */
-  bool have_intersect_discinct = FALSE,
-    is_last_distinct = FALSE; // mark last node is distinct or not
-  SELECT_LEX *last_union_distinct = NULL, *last_except = NULL, // for rule 4
+  bool have_intersect_distinct = FALSE,
+    is_prev_distinct = FALSE; // mark previous node is distinct or not
+  SELECT_LEX *last_union_distinct = NULL, // record the last union distinct in 
+                        // a sequence which not contains except. for rule 4.
+    *prev_except = NULL, // record previous except, for rule 4
     *begin_of_intersect_sequence = NULL; // for rule 2
   for(SELECT_LEX *s= first_sl; s; s= s->next_select())
   {
+    // apply rule 1
+    if(begin_of_intersect_sequence && s->linkage != INTERSECT_TYPE && have_intersect_distinct)
+    {
+      for(SELECT_LEX *si = begin_of_intersect_sequence; si != s; si = si->next_select())
+      {
+        si->distinct = true;
+      }
+      begin_of_intersect_sequence = NULL;
+    }
+
     switch(s->linkage)
     {
     case INTERSECT_TYPE:
@@ -1177,23 +1189,26 @@ bool st_select_lex_unit::prepare(TABLE_LIST *derived_arg,
       }
       if(s->distinct)
       {
-        have_intersect_discinct = TRUE;
+        have_intersect_distinct = TRUE;
       }
       break;
 
     case EXCEPT_TYPE:
-      if(is_last_distinct && !s->distinct)
+      // rule 3
+      if(is_prev_distinct && !s->distinct)
       {
         s->distinct = TRUE;
       }
+      // rule 4
       if(last_union_distinct)
       {
-        for(SELECT_LEX *node = last_except ? last_except->next_select() : first_sl;
+        for(SELECT_LEX *node = prev_except ? prev_except->next_select() : first_sl;
           node && node != last_union_distinct; node = node->next_select())
         {
           node->distinct = TRUE;
         } 
       }
+      // rule 2
       if(s->distinct && begin_of_intersect_sequence)
       {
         for(SELECT_LEX *node = begin_of_intersect_sequence;
@@ -1202,12 +1217,13 @@ bool st_select_lex_unit::prepare(TABLE_LIST *derived_arg,
           node->distinct = TRUE;
         }
       }
-      last_except = s;
+      prev_except = s;
       last_union_distinct = NULL;
       begin_of_intersect_sequence = NULL;
       break;
 
     case UNION_TYPE:
+      // rule 2
       if(s->distinct)
       {
         last_union_distinct = s;
@@ -1227,22 +1243,9 @@ bool st_select_lex_unit::prepare(TABLE_LIST *derived_arg,
       break;
     }
     if(s->linkage >= 1 && s->linkage <= 3)
-      is_last_distinct = s->distinct;
+      is_prev_distinct = s->distinct;
   }
-  last_union_distinct = NULL, last_except = NULL;
-  begin_of_intersect_sequence = NULL;
-
-  //convert intersect if need
-  if(have_intersect_discinct)
-  {
-    for(SELECT_LEX *s= first_sl; s; s= s->next_select())
-    {
-      if(s->linkage == INTERSECT_TYPE && !s->distinct)
-      {
-        s->distinct = TRUE;
-      }
-    }
-  }
+  last_union_distinct = NULL, prev_except = NULL;
 
   for (SELECT_LEX *s= first_sl; s; s= s->next_select())
   {
@@ -1890,7 +1893,8 @@ bool st_select_lex_unit::exec()
 	  sl->tvc->exec(sl);
 	else
 	  sl->join->exec();
-        if (sl == union_distinct && !(with_element && with_element->is_recursive))
+        // disable this block which will cause error
+        if (sl == union_distinct && !(with_element && with_element->is_recursive) && 0)
 	{
           // This is UNION DISTINCT, so there should be a fake_select_lex
           DBUG_ASSERT(fake_select_lex != NULL);
