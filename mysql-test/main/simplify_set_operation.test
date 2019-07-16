@@ -42,6 +42,10 @@ insert into t4 values (4,4),(4,4),(4,4);
 select * from t1 intersect all select * from t2 union all select * from t3 union select * from t4;
 select * from t1 intersect DISTINCT select * from t2 union DISTINCT select * from t3 union select * from t4;
 
+select * from t1 intersect all select * from t2 intersect all select * from t3 union select * from t4;
+select * from t1 intersect all select * from t2 intersect DISTINCT select * from t3 union select * from t4;
+select * from t1 intersect DISTINCT select * from t2 intersect DISTINCT select * from t3 union select * from t4;
+
 select * from t1 intersect all select * from t2 EXCEPT select * from t3 union select * from t4;
 select * from t1 intersect DISTINCT select * from t2 EXCEPT select * from t3 union select * from t4;
 select * from t1 intersect all select * from t2 EXCEPT ALL select * from t3 union select * from t4;
