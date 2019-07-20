@@ -500,6 +500,7 @@ bool select_unit::send_eof()
   {
     table->file->ha_disable_indexes(HA_KEY_SWITCH_ALL); // disable index to insert duplicate records
     int dup_cnt; // temporary variable to store `table->field[0]`
+    bool _is_duplicate = TRUE; // constant parameter, for create_internal_tmp_table_from_heap
     if (unlikely(file->ha_rnd_init_with_error(1)))
       return 1;
     do
@@ -521,6 +522,16 @@ bool select_unit::send_eof()
       for(int _cnt = 1; _cnt <= dup_cnt -1; ++_cnt)
       {
         if(likely((table->file->ha_write_tmp_row(table->record[0]))))
+        {
+          error = 1;
+          break;
+        }
+        /* create_internal_tmp_table_from_heap will generate error if needed */
+        if (table->file->is_fatal_error(write_err, HA_CHECK_DUP) &&
+            create_internal_tmp_table_from_heap(thd, table,
+                                                tmp_table_param.start_recinfo,
+                                                &tmp_table_param.recinfo,
+                                                write_err, 1, &_is_duplicate))
         {
           error = 1;
           break;
