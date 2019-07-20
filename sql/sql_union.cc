@@ -159,12 +159,25 @@ int select_unit::send_data(List<Item> &values)
     }
   }
 
+  /*if(!duplicate_cnt)
+  {
+    if(!is_distinct)
+      table->file->ha_disable_indexes(HA_KEY_SWITCH_ALL);
+    else
+    {
+      table->file->ha_delete_all_rows();
+      table->file->ha_enable_indexes(HA_KEY_SWITCH_ALL);
+    }
+    
+  }*/
+
   // select_unit::change_select() change step & Co correctly for each SELECT
   switch (step)
   {
     case UNION_TYPE:
     {
       int find_res;
+      // if operation sequence contains INTERSECT ALL or EXCEPT ALL
       if (duplicate_cnt && !is_distinct && !(find_res= table->file->find_unique_row(table->record[0], 0)))
       {
         store_record(table, record[1]);
@@ -172,6 +185,7 @@ int select_unit::send_data(List<Item> &values)
         not_reported_error|= table->file->ha_update_tmp_row(table->record[1],
                                                             table->record[0]);
       }
+      // operation sequence not contains INTERSECT ALL or EXCEPT ALL
       else if (unlikely((write_err= table->file->ha_write_tmp_row(table->record[0]))))
       {
         if (write_err == HA_ERR_FOUND_DUPP_KEY)
@@ -1075,7 +1089,8 @@ bool st_select_lex_unit::prepare(TABLE_LIST *derived_arg,
   uint union_part_count= 0;
   select_result *tmp_result;
   bool is_union_select;
-  bool have_except= FALSE, have_intersect= FALSE, have_all= FALSE;
+  bool have_except= FALSE, have_intersect= FALSE, 
+    have_except_all_or_intersect_all= FALSE;
   bool instantiate_tmp_table= false;
   bool single_tvc= !first_sl->next_select() && first_sl->tvc &&
                    !fake_select_lex;
@@ -1249,16 +1264,19 @@ bool st_select_lex_unit::prepare(TABLE_LIST *derived_arg,
 
   for (SELECT_LEX *s= first_sl; s; s= s->next_select())
   {
-    if(!s->distinct){
-      have_all = TRUE;
-    }
     switch (s->linkage)
     {
     case INTERSECT_TYPE:
       have_intersect= TRUE;
+      if(!s->distinct){
+        have_except_all_or_intersect_all = TRUE;
+      }
       break;
     case EXCEPT_TYPE:
       have_except= TRUE;
+      if(!s->distinct){
+        have_except_all_or_intersect_all = TRUE;
+      }
       break;
     default:
       break;
@@ -1513,7 +1531,7 @@ cont:
     if (!is_recursive)
     {
       uint hidden= 0;
-      if(have_all)
+      if(have_except_all_or_intersect_all)
       {
         // add duplicate_count
         ++hidden;
