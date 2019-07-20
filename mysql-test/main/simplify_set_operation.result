@@ -62,6 +62,18 @@ a	b
 2	2
 5	5
 4	4
+select * from t1 intersect all select * from t2 intersect all select * from t3 union select * from t4;
+a	b
+1	1
+4	4
+select * from t1 intersect all select * from t2 intersect DISTINCT select * from t3 union select * from t4;
+a	b
+1	1
+4	4
+select * from t1 intersect DISTINCT select * from t2 intersect DISTINCT select * from t3 union select * from t4;
+a	b
+1	1
+4	4
 select * from t1 intersect all select * from t2 EXCEPT select * from t3 union select * from t4;
 a	b
 4	4
@@ -110,3 +122,20 @@ drop table t1;
 drop table t2;
 drop table t3;
 drop table t4;
+select 1 intersect all select 2 intersect all select 3 intersect select 4 union select 5;
+1
+5
+select 1 intersect all select 2 intersect all select 3 union select 4 except select 5;
+1
+4
+select 1 union select 2 except all select 3 union select 4;
+1
+1
+2
+4
+select 1 union all select 2 union all select 3 union select 4;
+1
+1
+2
+3
+4

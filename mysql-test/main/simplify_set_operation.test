@@ -72,3 +72,9 @@ drop table t1;
 drop table t2;
 drop table t3;
 drop table t4;
+
+
+select 1 intersect all select 2 intersect all select 3 intersect select 4 union select 5;
+select 1 intersect all select 2 intersect all select 3 union select 4 except select 5;
+select 1 union select 2 except all select 3 union select 4;
+select 1 union all select 2 union all select 3 union select 4;
