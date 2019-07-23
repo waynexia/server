@@ -5696,7 +5696,7 @@ public:
 
   select_unit(THD *thd_arg):
     select_result_interceptor(thd_arg),
-    intersect_mark(0), duplicate_cnt(0), table(0)
+    intersect_mark(0), duplicate_cnt(0), table(0), is_send_data_set(FALSE)
   {
     init();
     tmp_table_param.init();
@@ -5713,6 +5713,8 @@ public:
   virtual bool postponed_prepare(List<Item> &types)
   { return false; }
   int send_data(List<Item> &items);
+  bool is_send_data_set;
+  void (*fill_record_for_send_data)(THD* thd,TABLE* table,List_item &values,uint curr_step);
   bool send_eof();
   virtual bool flush();
   void cleanup();

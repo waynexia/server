@@ -955,6 +955,7 @@ public:
   bool prepare(TABLE_LIST *derived_arg, select_result *sel_result,
                ulong additional_options);
   bool optimize();
+  void optimize_bag_operation();
   bool exec();
   bool exec_recursive();
   bool cleanup();
