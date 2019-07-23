@@ -127,26 +127,26 @@ int select_unit::send_data(List<Item> &values)
   else
   {
     /* initiate extra util field */
-    if (intersect_mark && duplicate_cnt)
-    {
-      fill_record(thd, table, table->field + 1 + 1, values, TRUE, FALSE);
-      table->field[0]->store((ulonglong) 1, 1); // duplicate counter initiate to 1
-      table->field[1]->store((ulonglong) 0, 1); // intersect counter initiate to 0
-    }
-    else if(duplicate_cnt && !intersect_mark)
-    {
-      fill_record(thd, table, table->field + 1, values, TRUE, FALSE);
-      table->field[0]->store((ulonglong) 1, 1);
-    }
-    else if(intersect_mark && !duplicate_cnt)
-    {
-      fill_record(thd, table, table->field + 1, values, TRUE, FALSE);
-      table->field[0]->store((ulonglong) curr_step, 1);
-    }
-    else if(!duplicate_cnt && !intersect_mark)
-    {
+    // if (intersect_mark && duplicate_cnt)
+    // {
+    //   fill_record(thd, table, table->field + 1 + 1, values, TRUE, FALSE);
+    //   table->field[0]->store((ulonglong) 1, 1); // duplicate counter initiate to 1
+    //   table->field[1]->store((ulonglong) 0, 1); // intersect counter initiate to 0
+    // }
+    // else if(duplicate_cnt && !intersect_mark)
+    // {
+    //   fill_record(thd, table, table->field + 1, values, TRUE, FALSE);
+    //   table->field[0]->store((ulonglong) 1, 1);
+    // }
+    // else if(intersect_mark && !duplicate_cnt)
+    // {
+    //   fill_record(thd, table, table->field + 1, values, TRUE, FALSE);
+    //   table->field[0]->store((ulonglong) curr_step, 1);
+    // }
+    // else if(!duplicate_cnt && !intersect_mark)
+    // {
       fill_record(thd, table, table->field, values, TRUE, FALSE);
-    }
+    // }
   }
 
   if (unlikely(thd->is_error()))
