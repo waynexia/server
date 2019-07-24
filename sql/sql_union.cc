@@ -122,10 +122,10 @@ int select_unit::send_data(List<Item> &values)
   if (table->no_rows_with_nulls)
     table->null_catch_flags= CHECK_ROW_FOR_NULLS_TO_REJECT;
 
-  if(is_send_data_set)
+  //if(is_send_data_set)
     fill_record_for_send_data(thd,table,values,curr_step);
-  else
-  {
+  //else
+  //{
     /* initiate extra util field */
     // if (intersect_mark && duplicate_cnt)
     // {
@@ -145,9 +145,9 @@ int select_unit::send_data(List<Item> &values)
     // }
     // else if(!duplicate_cnt && !intersect_mark)
     // {
-      fill_record(thd, table, table->field, values, TRUE, FALSE);
+    //  fill_record(thd, table, table->field, values, TRUE, FALSE);
     // }
-  }
+  //}
 
   if (unlikely(thd->is_error()))
   {
@@ -208,6 +208,7 @@ int select_unit::send_data(List<Item> &values)
       }
     }
     break;
+
   case EXCEPT_TYPE:
     if(duplicate_cnt && !is_distinct)
     {
@@ -1083,9 +1084,10 @@ bool st_select_lex_unit::join_union_item_types(THD *thd_arg,
   DBUG_RETURN(false);
 }
 
-void set_up_fill_record_function(select_unit* result, bool have_duplicate, bool have_intersect)
+void select_unit::set_up_fill_record_function(select_unit* result, bool have_duplicate, bool have_intersect)
 {
-  result->is_send_data_set= TRUE;
+  if(result->is_send_data_set)
+    return;
   /* determine how to call fill_record() in select_unit::send_data() */
   if(have_duplicate && have_intersect)
   {
@@ -1115,6 +1117,10 @@ void set_up_fill_record_function(select_unit* result, bool have_duplicate, bool 
       fill_record(thd, table, table->field, values, TRUE, FALSE);
     };
   }
+  if(!have_duplicate && !have_intersect)
+    result->is_send_data_set= FALSE;
+  else
+    result->is_send_data_set= TRUE;
 }
 
 bool st_select_lex_unit::prepare(TABLE_LIST *derived_arg,
@@ -1546,7 +1552,7 @@ cont:
     }
 
     if(union_result)
-      set_up_fill_record_function(union_result, have_except_all_or_intersect_all, have_intersect);
+      union_result->set_up_fill_record_function(union_result, have_except_all_or_intersect_all, have_intersect);
 
     if (fake_select_lex && !fake_select_lex->first_cond_optimization)
     {
@@ -1660,7 +1666,7 @@ err:
 
 /**
   @brief
-    optimize bag operation sequence
+    Optimize a sequence of set operations
 
   @details
     The method optimizes with the following rules:
@@ -1673,13 +1679,7 @@ err:
         then all set operations of this subsequence can be replaced for 
         UNION DISTINCT
     
-
-    There are two ways to set distinct; directly access this attribute or by 
-    method `set_linkage_and_distinct`. The second way has side effect that 
-    will change variable `union_distinct` which points to the last distinct
-    operation. If a modification will not generate new "the last one" the 
-    first way should be used. Only rule 2 will change `union_distinct` so 
-    need to check use which method.
+    Variable "union_distinct" will be updated in the end.
 */
 
 void st_select_lex_unit::optimize_bag_operation()
@@ -1775,6 +1775,92 @@ void st_select_lex_unit::optimize_bag_operation()
     }
   }
 }
+
+
+// void st_select_lex_unit::optimize_bag_operation()
+// {
+//   SELECT_LEX *sl;
+//   /* INTERSECT subsequence can occur only at the very beginning */
+//   /* The first select with linkage == INTERSECT_TYPE */
+//   SELECT_LEX *intersect_start= NULL;
+//   /* The first select after the INTERSECT subsequence */
+//   SELECT_LEX *intersect_end= NULL;
+//   /* Ultimately it will contain the last select with distinct == true */
+//   SELECT_LEX *last_distinct= NULL;
+//   /* 
+//     True if there is a select with:
+//     linkage == INTERSECT_TYPE && distinct==true
+//   */ 
+//   bool any_intersect_distinct= false;
+//   for (sl= first_select()->next_select(); sl; sl= sl->next_select())
+//   {
+//     if (sl->linkage != INTERSECT_TYPE)
+//     {
+//       intersect_end= sl;
+//       break;
+//     }
+//     else
+//     {
+//       if (!intersect_start)
+//         intersect_start= sl;
+//       if (sl->distinct)
+//       {
+//         any_intersect_distinct= true;
+//         last_distinct = sl;
+//       }
+//     }  
+//   }
+//   /* The previous select has or will have distinct set to true */
+//   bool is_prev_distinct= any_intersect_distinct;
+//   /* The first select of the current UNION ALL subsequence */
+//   SELECT_LEX *union_all_start= NULL;
+//   for ( ; sl; sl = sl->next_select())
+//   {
+//     DBUG_ASSERT (sl->linkage != INTERSECT_TYPE);
+//     if (!sl->distinct)
+//     {
+//       if (sl->linkage == UNION_TYPE)
+//       {
+//         if (!union_all_start)
+//           union_all_start= sl;
+//       }
+//       else
+//       { 
+//         DBUG_ASSERT (sl->linkage == EXCEPT_TYPE);
+//         union_all_start= NULL;
+//         if (is_prev_distinct)
+//         {
+//           sl->distinct= true;
+//           last_distinct = sl;
+//         }
+//       }
+//     }
+//     else
+//     { /* sl->distinct == true */ 
+//       if (union_all_start != NULL)
+//       {
+//         for (SELECT_LEX *si= union_all_start; si != sl; si= si->next_select())
+//           si->distinct= true;
+//       }
+//       last_distinct= sl;
+//     }
+//     is_prev_distinct= sl->distinct;
+//   }
+//   if (any_intersect_distinct ||
+//       (intersect_end != NULL && intersect_end->distinct))
+//   {
+//     for (sl= intersect_start; sl && sl != intersect_end; sl= sl->next_select())
+//     {
+//       sl->distinct= true;
+//       if (last_distinct->linkage == INTERSECT_TYPE)
+//         last_distinct= sl;
+//     }
+//   }
+//   if(last_distinct && last_distinct->linkage == INTERSECT_TYPE && 
+//     intersect_end && intersect_end->distinct)
+//     last_distinct = intersect_end;
+//   union_distinct= last_distinct;
+// }
 
 /**
   Run optimization phase.

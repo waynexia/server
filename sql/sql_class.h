@@ -5718,6 +5718,7 @@ public:
   bool send_eof();
   virtual bool flush();
   void cleanup();
+  void set_up_fill_record_function(select_unit* result, bool have_duplicate, bool have_intersect);
   virtual bool create_result_table(THD *thd, List<Item> *column_types,
                                    bool is_distinct, ulonglong options,
                                    const LEX_CSTRING *alias,
@@ -5733,6 +5734,7 @@ public:
     step= UNION_TYPE;
     write_err= 0;
     is_distinct = true;
+    set_up_fill_record_function(this,false,false);
   }
   void change_select();
 };
