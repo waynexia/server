@@ -9,6 +9,7 @@ select * from t1 except all select * from t2;
 select * from ((select * from t1) except all (select * from t2)) a;
 select * from ((select a from t1) except all (select c from t2)) a;
 select * from t1 except all select * from t1 union all select * from t1 union all select * from t1 except select * from t2;
+--sorted_result
 select * from t1 except all select * from t1 union all select * from t1 union all select * from t1 except all select * from t2;
 
 select * from (select * from t1 except all select * from t2) q1 except all select * from (select * from t1 except all select * from t2) q2;

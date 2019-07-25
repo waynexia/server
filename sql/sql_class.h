@@ -5685,6 +5685,7 @@ public:
 
 class select_unit :public select_result_interceptor
 {
+public:
   uint curr_step, prev_step, curr_sel;
   enum sub_select_type step;
   bool is_distinct;
@@ -5737,7 +5738,22 @@ public:
     is_distinct = true;
     set_up_function_for_send_data(this,false,false);
   }
+  virtual void change_select();
+};
+
+/*
+  derived class to process operations that need extra fields
+ */
+class select_unit_ext :public select_unit
+{
+public:
+  select_unit_ext(THD *thd_arg):
+    select_unit(thd_arg), offset(0), increment(0){};
+  int send_data(List<Item> &items);
   void change_select();
+
+  int offset;
+  int increment;
 };
 
 class select_union_recursive :public select_unit

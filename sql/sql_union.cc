@@ -144,16 +144,7 @@ int select_unit::send_data(List<Item> &values)
   switch (step)
   {
   case UNION_TYPE:
-    /* if operation sequence contains INTERSECT ALL or EXCEPT ALL */
-    if (duplicate_cnt && !is_distinct && !(find_res= table->file->find_unique_row(table->record[0], 0)))
-    {
-      store_record(table, record[1]);
-      table->field[0]->store(table->field[0]->val_int()+ 1, 0);
-      not_reported_error|= table->file->ha_update_tmp_row(table->record[1],
-                                                          table->record[0]);
-    }
-    /* operation sequence not contains INTERSECT ALL or EXCEPT ALL */
-    else if (unlikely((write_err= table->file->ha_write_tmp_row(table->record[0]))))
+    if (unlikely((write_err= table->file->ha_write_tmp_row(table->record[0]))))
     {
       if (write_err == HA_ERR_FOUND_DUPP_KEY)
       {
@@ -185,33 +176,6 @@ int select_unit::send_data(List<Item> &values)
     break;
 
   case EXCEPT_TYPE:
-    if(duplicate_cnt && !is_distinct)
-    {
-      if (!(find_res= table->file->find_unique_row(table->record[0], 0))) /* found */
-      {
-        if(table->field[0]->val_int() <= 1) /* need to delete this record */
-        {
-          table->status|= STATUS_DELETED;
-          not_reported_error= table->file->ha_delete_tmp_row(table->record[0]);
-        }
-        else /* decrease counter by 1 */
-        {
-          store_record(table, record[1]);
-          table->field[0]->store(table->field[0]->val_int()- 1, 0);
-          not_reported_error|= table->file->ha_update_tmp_row(table->record[1],
-                                                              table->record[0]);
-        }
-        DBUG_ASSERT(!table->triggers);
-        rc= MY_TEST(not_reported_error);
-        goto end;
-      }
-      else
-      {
-        /* not found, need not process. */
-        rc= 0;
-        goto end;
-      }
-    }
     /*
       The temporary table uses very first index or constrain for
       checking unique constrain.
@@ -231,84 +195,32 @@ int select_unit::send_data(List<Item> &values)
     }
     break;
   case INTERSECT_TYPE:
-    if(duplicate_cnt)
+    /*
+      The temporary table uses very first index or constrain for
+      checking unique constrain.
+    */
+    if (!(find_res= table->file->find_unique_row(table->record[0], 0)))
     {
-      if(!is_distinct)
+      DBUG_ASSERT(!table->triggers);
+      if (table->field[0]->val_int() != prev_step)
       {
-        /* found, increase `intersect_counter` by 1 */
-        if (!(find_res= table->file->find_unique_row(table->record[0], 0)))
-        {
-          store_record(table, record[1]);
-          table->field[1]->store(table->field[1]->val_int() + 1, 0);
-          not_reported_error|= table->file->ha_update_tmp_row(table->record[1],
-                                                              table->record[0]);
-          
-          DBUG_ASSERT(!table->triggers);
-          rc= MY_TEST(not_reported_error);
-          goto end;
-        }
-        else
-        {
-          /* not found, need not process. */
-          rc= 0;
-          goto end;
-        }
-      }
-      /*
-        The temporary table uses very first index or constrain for
-        checking unique constrain.
-      */
-      if (!(find_res= table->file->find_unique_row(table->record[0], 0)))
-      {
-        /*
-          found. set `intersect_counter` to 1.
-          other records' `intersect_counter` should be 0 and will be deleted in send_eof().
-        */
-        store_record(table, record[1]);
-        table->field[1]->store(1, 0);
-        not_reported_error= table->file->ha_update_tmp_row(table->record[1],
-                                                            table->record[0]);
-        rc= MY_TEST(not_reported_error);
-        DBUG_ASSERT(rc != HA_ERR_RECORD_IS_THE_SAME);
+        rc= 0;
         goto end;
       }
-      else
-      {
-        if ((rc= not_reported_error= (find_res != 1)))
-          goto end;
-      }
-      break;
+      store_record(table, record[1]);
+      table->field[0]->store(curr_step, 0);
+      not_reported_error= table->file->ha_update_tmp_row(table->record[1],
+                                                          table->record[0]);
+      rc= MY_TEST(not_reported_error);
+      DBUG_ASSERT(rc != HA_ERR_RECORD_IS_THE_SAME);
+      goto end;
     }
-    
     else
     {
-      /*
-        The temporary table uses very first index or constrain for
-        checking unique constrain.
-      */
-      if (!(find_res= table->file->find_unique_row(table->record[0], 0)))
-      {
-        DBUG_ASSERT(!table->triggers);
-        if (table->field[0]->val_int() != prev_step)
-        {
-          rc= 0;
-          goto end;
-        }
-        store_record(table, record[1]);
-        table->field[0]->store(curr_step, 0);
-        not_reported_error= table->file->ha_update_tmp_row(table->record[1],
-                                                            table->record[0]);
-        rc= MY_TEST(not_reported_error);
-        DBUG_ASSERT(rc != HA_ERR_RECORD_IS_THE_SAME);
+      if ((rc= not_reported_error= (find_res != 1)))
         goto end;
-      }
-      else
-      {
-        if ((rc= not_reported_error= (find_res != 1)))
-          goto end;
-      }
-      break;
     }
+    break;
   default:
     DBUG_ASSERT(0);
   }
@@ -431,8 +343,13 @@ bool select_unit::send_eof()
         }
         break;
       }
-      if (table->field[0]->val_int() == 0)
-        error= file->ha_delete_tmp_row(table->record[0]);
+      if (table->field[0]->val_int() <= 0)
+      {
+        table->status |= STATUS_DELETED;
+        error|= file->ha_delete_tmp_row(table->record[0]);
+        error|= MY_TEST(error);
+        DBUG_ASSERT(!table->triggers);
+      }
       else if(is_next_distinct)
       {
         store_record(table, record[1]);
@@ -686,6 +603,185 @@ void select_unit::cleanup()
   table->file->ha_delete_all_rows();
 }
 
+
+/*
+  @brief
+
+  @detail
+
+
+*/
+
+void select_unit_ext::change_select()
+{
+  select_unit::change_select();
+  
+  if(step == EXCEPT_TYPE)
+    increment= -1;
+  else
+    increment= 1;
+
+  if(step == INTERSECT_TYPE)
+    offset= 1;
+  else
+    offset= 0;
+}
+
+
+/*
+  @brief
+    Fill temporary tables for operations need extra fields
+  @detail
+
+
+*/
+
+int select_unit_ext::send_data(List<Item> &values)
+{
+  int rc;
+  int not_reported_error= 0;
+  int find_res;
+  if (unit->offset_limit_cnt)
+  {						// using limit offset,count
+    unit->offset_limit_cnt--;
+    return 0;
+  }
+  if (thd->killed == ABORT_QUERY)
+    return 0;
+  if (table->no_rows_with_nulls)
+    table->null_catch_flags= CHECK_ROW_FOR_NULLS_TO_REJECT;
+
+  fill_record_for_send_data(thd,table,values,curr_step);
+
+  if (unlikely(thd->is_error()))
+  {
+    rc= 1;
+    goto end;
+  }
+  if (table->no_rows_with_nulls)
+  {
+    table->null_catch_flags&= ~CHECK_ROW_FOR_NULLS_TO_REJECT;
+    if (table->null_catch_flags)
+    {
+      rc= 0;
+      goto end;
+    }
+  }
+
+  if(!is_distinct)
+  {/* not distinct */
+    if(!(find_res= table->file->find_unique_row(table->record[0], 0)))
+    {/* found this record, then increase the counter by delta */
+      store_record(table, record[1]);
+      table->field[offset]->store(table->field[offset]->val_int()+ increment, 0);
+      not_reported_error|= table->file->ha_update_tmp_row(table->record[1],
+                                                        table->record[0]);
+      DBUG_ASSERT(!table->triggers);
+      rc= MY_TEST(not_reported_error);
+      goto end;
+    }
+    else
+    {/* not found */
+      if(step == UNION_TYPE)
+      {/* is union type, need to write this record into table*/
+        goto write_record;
+      }
+      else
+      {/* is intersect or except type, need not to process */
+        DBUG_ASSERT(step == INTERSECT_TYPE || step == EXCEPT_TYPE);
+        rc= 0;
+        goto end;
+      }
+    }
+  }
+  else
+  {/* distinct */
+    switch(step)
+    {
+    case UNION_TYPE:
+      goto write_record;
+      break;
+
+    case EXCEPT_TYPE:
+      if (!(find_res= table->file->find_unique_row(table->record[0], 0)))
+      {
+        DBUG_ASSERT(!table->triggers);
+        table->status|= STATUS_DELETED;
+        not_reported_error= table->file->ha_delete_tmp_row(table->record[0]);
+        rc= MY_TEST(not_reported_error);
+        goto end;
+      }
+      else
+      {
+        if ((rc= not_reported_error= (find_res != 1)))
+          goto end;
+      }
+      break;
+
+    case INTERSECT_TYPE:
+      if (!(find_res= table->file->find_unique_row(table->record[0], 0)))
+      {
+        store_record(table, record[1]);
+        table->field[1]->store(1, 0);
+        not_reported_error= table->file->ha_update_tmp_row(table->record[1],
+                                                            table->record[0]);
+        rc= MY_TEST(not_reported_error);
+        DBUG_ASSERT(rc != HA_ERR_RECORD_IS_THE_SAME);
+        goto end;
+      }
+      else
+      {
+        if ((rc= not_reported_error= (find_res != 1)))
+          goto end;
+      }
+      break;
+    default:
+      DBUG_ASSERT(0);
+    }
+  }
+  rc= 0;
+
+goto end;
+write_record:
+  rc = 0;
+  if (unlikely((write_err= table->file->ha_write_tmp_row(table->record[0]))))
+  {
+    if (write_err == HA_ERR_FOUND_DUPP_KEY)
+    {
+      /*
+        Inform upper level that we found a duplicate key, that should not
+        be counted as part of limit
+      */
+      rc= -1;
+      goto end;
+    }
+    bool is_duplicate= FALSE;
+    /* create_internal_tmp_table_from_heap will generate error if needed */
+    if (table->file->is_fatal_error(write_err, HA_CHECK_DUP) &&
+        create_internal_tmp_table_from_heap(thd, table,
+                                            tmp_table_param.start_recinfo,
+                                            &tmp_table_param.recinfo,
+                                            write_err, 1, &is_duplicate))
+    {
+      rc= 1;
+      goto end;
+    }
+
+    if (is_duplicate)
+    {
+      rc= -1;
+      goto end;
+    }
+  }
+
+end:
+  if (unlikely(not_reported_error))
+  {
+    DBUG_ASSERT(rc);
+    table->file->print_error(not_reported_error, MYF(0));
+  }
+  return rc;
+}
 
 void select_union_recursive::cleanup()
 {
@@ -1232,7 +1328,10 @@ bool st_select_lex_unit::prepare(TABLE_LIST *derived_arg,
     else
     {
       if (!is_recursive)
-	      union_result= new (thd->mem_root) select_unit(thd);
+        if(have_except_all_or_intersect_all)
+          union_result= new (thd->mem_root) select_unit_ext(thd);
+        else
+	        union_result= new (thd->mem_root) select_unit(thd);
       else
       {
         with_element->rec_result=
