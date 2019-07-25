@@ -5715,10 +5715,11 @@ public:
   int send_data(List<Item> &items);
   bool is_send_data_set;
   void (*fill_record_for_send_data)(THD* thd,TABLE* table,List_item &values,uint curr_step);
+  int (*execute_operation_for_send_data)(THD* thd, TABLE* table, select_unit* t, bool is_distinct, uint curr_step, uint prev_step, int& not_reported_error);
   bool send_eof();
   virtual bool flush();
   void cleanup();
-  void set_up_fill_record_function(select_unit* result, bool have_duplicate, bool have_intersect);
+  void set_up_function_for_send_data(select_unit* result, bool have_duplicate, bool have_intersect);
   virtual bool create_result_table(THD *thd, List<Item> *column_types,
                                    bool is_distinct, ulonglong options,
                                    const LEX_CSTRING *alias,
@@ -5734,7 +5735,7 @@ public:
     step= UNION_TYPE;
     write_err= 0;
     is_distinct = true;
-    set_up_fill_record_function(this,false,false);
+    set_up_function_for_send_data(this,false,false);
   }
   void change_select();
 };

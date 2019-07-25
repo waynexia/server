@@ -122,32 +122,7 @@ int select_unit::send_data(List<Item> &values)
   if (table->no_rows_with_nulls)
     table->null_catch_flags= CHECK_ROW_FOR_NULLS_TO_REJECT;
 
-  //if(is_send_data_set)
-    fill_record_for_send_data(thd,table,values,curr_step);
-  //else
-  //{
-    /* initiate extra util field */
-    // if (intersect_mark && duplicate_cnt)
-    // {
-    //   fill_record(thd, table, table->field + 1 + 1, values, TRUE, FALSE);
-    //   table->field[0]->store((ulonglong) 1, 1); // duplicate counter initiate to 1
-    //   table->field[1]->store((ulonglong) 0, 1); // intersect counter initiate to 0
-    // }
-    // else if(duplicate_cnt && !intersect_mark)
-    // {
-    //   fill_record(thd, table, table->field + 1, values, TRUE, FALSE);
-    //   table->field[0]->store((ulonglong) 1, 1);
-    // }
-    // else if(intersect_mark && !duplicate_cnt)
-    // {
-    //   fill_record(thd, table, table->field + 1, values, TRUE, FALSE);
-    //   table->field[0]->store((ulonglong) curr_step, 1);
-    // }
-    // else if(!duplicate_cnt && !intersect_mark)
-    // {
-    //  fill_record(thd, table, table->field, values, TRUE, FALSE);
-    // }
-  //}
+  fill_record_for_send_data(thd,table,values,curr_step);
 
   if (unlikely(thd->is_error()))
   {
@@ -1084,10 +1059,12 @@ bool st_select_lex_unit::join_union_item_types(THD *thd_arg,
   DBUG_RETURN(false);
 }
 
-void select_unit::set_up_fill_record_function(select_unit* result, bool have_duplicate, bool have_intersect)
+void select_unit::set_up_function_for_send_data(select_unit* result, bool have_duplicate, bool have_intersect)
 {
+  /* only set once (except set in constructor) */
   if(result->is_send_data_set)
     return;
+
   /* determine how to call fill_record() in select_unit::send_data() */
   if(have_duplicate && have_intersect)
   {
@@ -1117,6 +1094,7 @@ void select_unit::set_up_fill_record_function(select_unit* result, bool have_dup
       fill_record(thd, table, table->field, values, TRUE, FALSE);
     };
   }
+  /* mark as setted */
   if(!have_duplicate && !have_intersect)
     result->is_send_data_set= FALSE;
   else
@@ -1552,7 +1530,7 @@ cont:
     }
 
     if(union_result)
-      union_result->set_up_fill_record_function(union_result, have_except_all_or_intersect_all, have_intersect);
+      union_result->set_up_function_for_send_data(union_result, have_except_all_or_intersect_all, have_intersect);
 
     if (fake_select_lex && !fake_select_lex->first_cond_optimization)
     {
@@ -1680,187 +1658,94 @@ err:
         UNION DISTINCT
     
     Variable "union_distinct" will be updated in the end.
+    Not comatible with Oracle Mode.
 */
 
 void st_select_lex_unit::optimize_bag_operation()
 {
-  SELECT_LEX *first_sl= first_select();
-  bool is_prev_distinct= FALSE; // mark previous node is distinct or not
-  bool can_replace_intersect_all = FALSE;
-  SELECT_LEX *last_union_distinct= NULL; // record the last union distinct in 
-                      // a subsequence which not contains except. for rule 3.
-  SELECT_LEX *prev_except= NULL; // record previous except, for rule 3
-  for(SELECT_LEX *s= first_sl; s; s= s->next_select())
+  SELECT_LEX *sl;
+  /* INTERSECT subsequence can occur only at the very beginning */
+  /* The first select with linkage == INTERSECT_TYPE */
+  SELECT_LEX *intersect_start= NULL;
+  /* The first select after the INTERSECT subsequence */
+  SELECT_LEX *intersect_end= NULL;
+  /* Ultimately it will contain the last select with distinct == true */
+  SELECT_LEX *last_distinct= NULL;
+  /* 
+    True if there is a select with:
+    linkage == INTERSECT_TYPE && distinct==true
+  */ 
+  bool any_intersect_distinct= false;
+  for (sl= first_select()->next_select(); sl; sl= sl->next_select())
   {
-    switch(s->linkage)
+    if (sl->linkage != INTERSECT_TYPE)
     {
-    case INTERSECT_TYPE:
-      break;
-
-    case EXCEPT_TYPE:
-      /* rule 2 */
-      if(is_prev_distinct && !s->distinct)
-      {
-        bool will_change_the_last_distinct= false;
-        for(SELECT_LEX *si= s->next_select();si;si= si->next_select())
-        {
-          if(si->distinct)
-          {
-            will_change_the_last_distinct= true;
-            break;
-          }  
-        }
-        if(will_change_the_last_distinct)
-          s->distinct= TRUE;
-        else
-          s->set_linkage_and_distinct(s->linkage,TRUE);
-      }
-      /* rule 3 */
-      if(last_union_distinct)
-      {
-        for(SELECT_LEX *node= prev_except ? prev_except->next_select() : first_sl;
-          node && node != last_union_distinct; node= node->next_select())
-        {
-          node->distinct= TRUE;
-        } 
-      }
-      prev_except= s;
-      last_union_distinct= NULL;
-      break;
-
-    case UNION_TYPE:
-      /* rule 3 */
-      if(s->distinct && last_union_distinct)
-      {
-        for(SELECT_LEX *node= prev_except ? prev_except->next_select() : first_sl;
-          node && node != last_union_distinct; node= node->next_select())
-        {
-          node->distinct= TRUE;
-        } 
-      }
-      break;
-
-    default:
-      break;
-    }
-    /* this is to judge `s` is set operation or not */
-    if(s->linkage >= UNION_TYPE && s->linkage <= EXCEPT_TYPE)
-      is_prev_distinct= s->distinct;
-  }
-
-  /* rule 1 */
-  for(SELECT_LEX *s= first_sl; s; s= s->next_select())
-  {
-    if(s->linkage != INTERSECT_TYPE)
-    {
-      if(s->distinct)
-        can_replace_intersect_all = TRUE;
+      intersect_end= sl;
       break;
     }
     else
     {
-      if(s->distinct)
+      if (!intersect_start)
+        intersect_start= sl;
+      if (sl->distinct)
       {
-        can_replace_intersect_all = TRUE;
-        break;
+        any_intersect_distinct= true;
+        last_distinct = sl;
+      }
+    }  
+  }
+  /* The previous select has or will have distinct set to true */
+  bool is_prev_distinct= any_intersect_distinct;
+  /* The first select of the current UNION ALL subsequence */
+  SELECT_LEX *union_all_start= NULL;
+  for ( ; sl; sl = sl->next_select())
+  {
+    DBUG_ASSERT (sl->linkage != INTERSECT_TYPE);
+    if (!sl->distinct)
+    {
+      if (sl->linkage == UNION_TYPE)
+      {
+        if (!union_all_start)
+          union_all_start= sl;
+      }
+      else
+      { 
+        DBUG_ASSERT (sl->linkage == EXCEPT_TYPE);
+        union_all_start= NULL;
+        if (is_prev_distinct)
+        {
+          sl->distinct= true;
+          last_distinct = sl;
+        }
       }
     }
+    else
+    { /* sl->distinct == true */ 
+      if (union_all_start != NULL)
+      {
+        for (SELECT_LEX *si= union_all_start; si != sl; si= si->next_select())
+          si->distinct= true;
+      }
+      last_distinct= sl;
+    }
+    is_prev_distinct= sl->distinct;
   }
-  if(can_replace_intersect_all)
+  if (any_intersect_distinct ||
+      (intersect_end != NULL && intersect_end->distinct))
   {
-    for(SELECT_LEX *s= first_sl; s && s->linkage == INTERSECT_TYPE; 
-      s= s->next_select()) 
+    for (sl= intersect_start; sl && sl != intersect_end; sl= sl->next_select())
     {
-      s->distinct= TRUE;
+      sl->distinct= true;
+      if (last_distinct->linkage == INTERSECT_TYPE)
+        last_distinct= sl;
     }
   }
+  if(last_distinct && last_distinct->linkage == INTERSECT_TYPE && 
+    intersect_end && intersect_end->distinct)
+    last_distinct = intersect_end;
+  union_distinct= last_distinct;
 }
 
-
-// void st_select_lex_unit::optimize_bag_operation()
-// {
-//   SELECT_LEX *sl;
-//   /* INTERSECT subsequence can occur only at the very beginning */
-//   /* The first select with linkage == INTERSECT_TYPE */
-//   SELECT_LEX *intersect_start= NULL;
-//   /* The first select after the INTERSECT subsequence */
-//   SELECT_LEX *intersect_end= NULL;
-//   /* Ultimately it will contain the last select with distinct == true */
-//   SELECT_LEX *last_distinct= NULL;
-//   /* 
-//     True if there is a select with:
-//     linkage == INTERSECT_TYPE && distinct==true
-//   */ 
-//   bool any_intersect_distinct= false;
-//   for (sl= first_select()->next_select(); sl; sl= sl->next_select())
-//   {
-//     if (sl->linkage != INTERSECT_TYPE)
-//     {
-//       intersect_end= sl;
-//       break;
-//     }
-//     else
-//     {
-//       if (!intersect_start)
-//         intersect_start= sl;
-//       if (sl->distinct)
-//       {
-//         any_intersect_distinct= true;
-//         last_distinct = sl;
-//       }
-//     }  
-//   }
-//   /* The previous select has or will have distinct set to true */
-//   bool is_prev_distinct= any_intersect_distinct;
-//   /* The first select of the current UNION ALL subsequence */
-//   SELECT_LEX *union_all_start= NULL;
-//   for ( ; sl; sl = sl->next_select())
-//   {
-//     DBUG_ASSERT (sl->linkage != INTERSECT_TYPE);
-//     if (!sl->distinct)
-//     {
-//       if (sl->linkage == UNION_TYPE)
-//       {
-//         if (!union_all_start)
-//           union_all_start= sl;
-//       }
-//       else
-//       { 
-//         DBUG_ASSERT (sl->linkage == EXCEPT_TYPE);
-//         union_all_start= NULL;
-//         if (is_prev_distinct)
-//         {
-//           sl->distinct= true;
-//           last_distinct = sl;
-//         }
-//       }
-//     }
-//     else
-//     { /* sl->distinct == true */ 
-//       if (union_all_start != NULL)
-//       {
-//         for (SELECT_LEX *si= union_all_start; si != sl; si= si->next_select())
-//           si->distinct= true;
-//       }
-//       last_distinct= sl;
-//     }
-//     is_prev_distinct= sl->distinct;
-//   }
-//   if (any_intersect_distinct ||
-//       (intersect_end != NULL && intersect_end->distinct))
-//   {
-//     for (sl= intersect_start; sl && sl != intersect_end; sl= sl->next_select())
-//     {
-//       sl->distinct= true;
-//       if (last_distinct->linkage == INTERSECT_TYPE)
-//         last_distinct= sl;
-//     }
-//   }
-//   if(last_distinct && last_distinct->linkage == INTERSECT_TYPE && 
-//     intersect_end && intersect_end->distinct)
-//     last_distinct = intersect_end;
-//   union_distinct= last_distinct;
-// }
 
 /**
   Run optimization phase.
