@@ -2348,7 +2348,7 @@ void st_select_lex_unit::init_query()
   select_limit_cnt= HA_POS_ERROR;
   offset_limit_cnt= 0;
   union_distinct= 0;
-  prepared= optimized= optimized_2= executed= 0;
+  prepared= optimized= optimized_2= executed= bag_optimized= 0;
   optimize_started= 0;
   item= 0;
   union_result= 0;

@@ -391,54 +391,6 @@ bool select_unit::send_eof()
     file->ha_rnd_end();
   }
 
-  /* unfold in the end of sequence */
-  if( duplicate_cnt && (! thd->lex->current_select->next_select() ||
-      (thd->lex->current_select->next_select() && 
-      ! thd->lex->current_select->next_select()->is_linkage_set())))
-  {
-    table->file->ha_disable_indexes(HA_KEY_SWITCH_ALL); /* disable index to insert duplicate records */
-    int dup_cnt; /* temporary variable to store `table->field[0]` */
-    bool _is_duplicate= TRUE; /* constant parameter, for create_internal_tmp_table_from_heap */
-    if (unlikely(file->ha_rnd_init_with_error(1)))
-      return 1;
-    do
-    {
-      if (unlikely(error= file->ha_rnd_next(table->record[0])))
-      {
-        if (error == HA_ERR_END_OF_FILE)
-        {
-          error= 0;
-          break;
-        }
-        break;
-      }
-      dup_cnt= table->field[0]->val_int();
-      store_record(table, record[1]);
-      table->field[0]->store((longlong)1, 0);
-      error= table->file->ha_update_tmp_row(table->record[1],
-                                            table->record[0]);
-      for(int _cnt= 1; _cnt <= dup_cnt -1; ++_cnt)
-      {
-        if(likely((table->file->ha_write_tmp_row(table->record[0]))))
-        {
-          error= 1;
-          break;
-        }
-        /* create_internal_tmp_table_from_heap will generate error if needed */
-        if (table->file->is_fatal_error(write_err, HA_CHECK_DUP) &&
-            create_internal_tmp_table_from_heap(thd, table,
-                                                tmp_table_param.start_recinfo,
-                                                &tmp_table_param.recinfo,
-                                                write_err, 1, &_is_duplicate))
-        {
-          error= 1;
-          break;
-        }
-      }
-    } while (likely(!error));
-    file->ha_rnd_end();
-  }
-
   if (unlikely(error))
     table->file->print_error(error, MYF(0));
 
@@ -606,10 +558,13 @@ void select_unit::cleanup()
 
 /*
   @brief
-
+    Set up value needed by send_data()
   @detail
+    - For EXCEPT we will decrease the counter by one
+    and INTERSECT / UNION we increase the counter.
 
-
+    - For INTERSECT we will modify the second extra field (intersect counter)
+    and for EXCEPT / UNION we modify the first (duplicate counter)
 */
 
 void select_unit_ext::change_select()
@@ -632,7 +587,12 @@ void select_unit_ext::change_select()
   @brief
     Fill temporary tables for operations need extra fields
   @detail
+    - If this operation is not distinct, we try to find it and increase the 
+    counter if found.
 
+    - If it is distinct, for UNION we write this record; for INTERSECT we 
+    try to find it and increase the intersect counter if found; for EXCEPT
+    we try to find it and delete that record if found.
 
 */
 
@@ -781,6 +741,148 @@ end:
     table->file->print_error(not_reported_error, MYF(0));
   }
   return rc;
+}
+
+
+/*
+  @brief
+    Do post-operation after a operator
+  @detail
+    -If next is distinct set duplicate counter to 1
+    -If next is intersect set intersect counter to 0
+    -If this one is intersect set duplicate counter to the minimal between
+      duplicate counter and intersect counter
+    -If a record's duplicate counter is lesser then 1 we delete it.
+    -In the end of the whole sequence we unfold duplicate records
+*/
+
+bool select_unit_ext::send_eof()
+{
+  handler *file= table->file;
+  int error;
+  bool is_next_distinct= thd->lex->current_select->next_select() &&
+    thd->lex->current_select->next_select()->distinct;
+  bool is_next_intersect = thd->lex->current_select->next_select() &&
+    thd->lex->current_select->next_select()->get_linkage() == INTERSECT_TYPE &&
+    intersect_mark;
+  bool is_end_of_sequence = (! thd->lex->current_select->next_select() ||
+    (thd->lex->current_select->next_select() && 
+    ! thd->lex->current_select->next_select()->is_linkage_set()));
+  /* whether need to call ha_update_tmp_row() */
+  bool need_update_row;
+
+  if (unlikely(file->ha_rnd_init_with_error(1)))
+    return 1;
+  do
+  {
+    need_update_row= FALSE;
+    if (unlikely(error= file->ha_rnd_next(table->record[0])))
+    {
+      if (error == HA_ERR_END_OF_FILE)
+      {
+        error= 0;
+        break;
+      }
+      break;
+    }    
+    store_record(table, record[1]);
+    if(is_next_distinct)
+    { /* set duplicate counter to 1 if next operation is distinct */
+      table->field[0]->store(1, 0);
+      need_update_row= TRUE;
+    }
+    if (step == INTERSECT_TYPE && table->field[0]->val_int() > table->field[1]->val_int())
+    { /* take minimal between `counter` and `intersect_counter` for INTERSECT */
+      table->field[0]->store(table->field[1]->val_int(), 0);
+      need_update_row= TRUE;
+    }
+    if(is_next_intersect)
+    { /* initiate `intersect_count` to 0 for intersect */
+      table->field[1]->store((longlong)0, 0);
+      need_update_row= TRUE;
+    }
+    if(need_update_row)
+    {
+      error= table->file->ha_update_tmp_row(table->record[1],
+                                            table->record[0]);
+    }
+
+  } while (likely(!error));
+  file->ha_rnd_end();
+
+  /* delete record */
+  if (unlikely(file->ha_rnd_init_with_error(1)))
+    return 1;
+  do
+  {
+    if (unlikely(error= file->ha_rnd_next(table->record[0])))
+    {
+      if (error == HA_ERR_END_OF_FILE)
+      {
+        error= 0;
+        break;
+      }
+      break;
+    }
+    if (table->field[0]->val_int() <= 0)
+    {
+      table->status |= STATUS_DELETED;
+      error|= file->ha_delete_tmp_row(table->record[0]);
+      DBUG_ASSERT(!table->triggers);
+    }
+  } while (likely(!error));
+  file->ha_rnd_end();
+
+  /* unfold in the end of sequence */
+  if(is_end_of_sequence)
+  {
+    table->file->ha_disable_indexes(HA_KEY_SWITCH_ALL); /* disable index to insert duplicate records */
+    int dup_cnt; /* temporary variable to store `table->field[0]` */
+    bool _is_duplicate= TRUE; /* constant parameter, for create_internal_tmp_table_from_heap */
+    if (unlikely(file->ha_rnd_init_with_error(1)))
+      return 1;
+    do
+    {
+      if (unlikely(error= file->ha_rnd_next(table->record[0])))
+      {
+        if (error == HA_ERR_END_OF_FILE)
+        {
+          error= 0;
+          break;
+        }
+        break;
+      }
+      dup_cnt= table->field[0]->val_int();
+      store_record(table, record[1]);
+      table->field[0]->store((longlong)1, 0);
+      error= table->file->ha_update_tmp_row(table->record[1],
+                                            table->record[0]);
+      for(int _cnt= 1; _cnt <= dup_cnt -1; ++_cnt)
+      {
+        if(likely((table->file->ha_write_tmp_row(table->record[0]))))
+        {
+          error= 1;
+          break;
+        }
+        /* create_internal_tmp_table_from_heap will generate error if needed */
+        if (table->file->is_fatal_error(write_err, HA_CHECK_DUP) &&
+            create_internal_tmp_table_from_heap(thd, table,
+                                                tmp_table_param.start_recinfo,
+                                                &tmp_table_param.recinfo,
+                                                write_err, 1, &_is_duplicate))
+        {
+          error= 1;
+          break;
+        }
+      }
+    } while (likely(!error));
+    file->ha_rnd_end();
+  }
+
+  if (unlikely(error))
+    table->file->print_error(error, MYF(0));
+
+  return(MY_TEST(error));
 }
 
 void select_union_recursive::cleanup()
@@ -1286,8 +1388,6 @@ bool st_select_lex_unit::prepare(TABLE_LIST *derived_arg,
   found_rows_for_union= first_sl->options & OPTION_FOUND_ROWS;
   is_union_select= is_unit_op() || fake_select_lex || single_tvc;
 
-  optimize_bag_operation();
-
   for (SELECT_LEX *s= first_sl; s; s= s->next_select())
   {
     switch (s->linkage)
@@ -1482,6 +1582,9 @@ bool st_select_lex_unit::prepare(TABLE_LIST *derived_arg,
       }
     }      
   }
+
+  if(!bag_optimized)
+    optimize_bag_operation();
   // In case of a non-recursive UNION, join data types for all UNION parts.
   if (!is_recursive && join_union_item_types(thd, types, union_part_count))
     goto err;
@@ -1841,8 +1944,9 @@ void st_select_lex_unit::optimize_bag_operation()
   }
   if(last_distinct && last_distinct->linkage == INTERSECT_TYPE && 
     intersect_end && intersect_end->distinct)
-    last_distinct = intersect_end;
+    last_distinct= intersect_end;
   union_distinct= last_distinct;
+  bag_optimized= TRUE;
 }
 
 
@@ -2468,7 +2572,7 @@ bool st_select_lex_unit::cleanup()
 
 void st_select_lex_unit::reinit_exec_mechanism()
 {
-  prepared= optimized= optimized_2= executed= 0;
+  prepared= optimized= optimized_2= executed= bag_optimized= 0;
   optimize_started= 0;
   if (with_element && with_element->is_recursive)
     with_element->reset_recursive_for_exec();

@@ -5751,6 +5751,7 @@ public:
     select_unit(thd_arg), offset(0), increment(0){};
   int send_data(List<Item> &items);
   void change_select();
+  bool send_eof();
 
   int offset;
   int increment;
