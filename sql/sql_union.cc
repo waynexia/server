@@ -121,8 +121,12 @@ int select_unit::send_data(List<Item> &values)
     return 0;
   if (table->no_rows_with_nulls)
     table->null_catch_flags= CHECK_ROW_FOR_NULLS_TO_REJECT;
-
-  fill_record_for_send_data(thd,table,values,curr_step);
+  
+  /* fill and set record */
+  fill_record(thd, table, table->field + (intersect_mark ? 1 : 0),
+    values, TRUE, FALSE);
+  if(intersect_mark)
+    table->field[0]->store((ulonglong) curr_step, 1);
 
   if (unlikely(thd->is_error()))
   {
@@ -237,159 +241,51 @@ end:
 
 bool select_unit::send_eof()
 {
-  handler *file= table->file;
-  int error;
-
-  if(!duplicate_cnt)
+  if (step != INTERSECT_TYPE ||
+  (thd->lex->current_select->next_select() &&
+  thd->lex->current_select->next_select()->get_linkage() == INTERSECT_TYPE))
   {
-    if (step != INTERSECT_TYPE ||
-    (thd->lex->current_select->next_select() &&
-    thd->lex->current_select->next_select()->get_linkage() == INTERSECT_TYPE))
-    {
-      /*
-        it is not INTESECT or next SELECT in the sequence is INTERSECT so no
-        need filtering (the last INTERSECT in this sequence of intersects will
-        filter).
-      */
-      return 0;
-    }
-
     /*
-      It is last select in the sequence of INTERSECTs so we should filter out
-      all records except marked with actual counter.
-
-    TODO: as optimization for simple case this could be moved to
-    'fake_select' WHERE condition
+      it is not INTESECT or next SELECT in the sequence is INTERSECT so no
+      need filtering (the last INTERSECT in this sequence of intersects will
+      filter).
     */
-    handler *file= table->file;
-    int error;
-
-    if (file->ha_rnd_init_with_error(1))
-      return 1;
-
-    do
-    {
-      error= file->ha_rnd_next(table->record[0]);
-      if (error)
-      {
-        if (error == HA_ERR_END_OF_FILE)
-        {
-          error= 0;
-          break;
-        }
-        if (unlikely(error == HA_ERR_RECORD_DELETED))
-        {
-          error= 0;
-          continue;
-        }
-        break;
-      }
-      if (table->field[0]->val_int() != curr_step)
-        error= file->ha_delete_tmp_row(table->record[0]);
-    } while (!error);
-    file->ha_rnd_end();
-
-    if (unlikely(error))
-    table->file->print_error(error, MYF(0));
-
-    return(MY_TEST(error));
-  }
-
-  /* take minimal between `counter` and `intersect_counter` for INTERSECT */
-  if (step == INTERSECT_TYPE)
-  {
-    if (unlikely(file->ha_rnd_init_with_error(1)))
-      return 1;
-    do
-    {
-      if (unlikely(error= file->ha_rnd_next(table->record[0])))
-      {
-        if (error == HA_ERR_END_OF_FILE)
-        {
-          error= 0;
-          break;
-        }
-        break;
-      }
-      if (table->field[0]->val_int() > table->field[1]->val_int())
-      {
-        store_record(table, record[1]);
-        table->field[0]->store(table->field[1]->val_int(), 0);
-        error= table->file->ha_update_tmp_row(table->record[1],
-                                              table->record[0]);
-      }
-    } while (likely(!error));
-    file->ha_rnd_end();
+    return 0;
   }
 
   /*
-    (1) delete a record if it duplicate counter lesser than 1
-    (2) set duplicate counter to 1 if next operation is distinct
-   */
-  if(duplicate_cnt)
+    It is last select in the sequence of INTERSECTs so we should filter out
+    all records except marked with actual counter.
+
+  TODO: as optimization for simple case this could be moved to
+  'fake_select' WHERE condition
+  */
+  handler *file= table->file;
+  int error;
+
+  if (file->ha_rnd_init_with_error(1))
+    return 1;
+  do
   {
-    bool is_next_distinct= thd->lex->current_select->next_select() &&
-        thd->lex->current_select->next_select()->distinct;
-    if (unlikely(file->ha_rnd_init_with_error(1)))
-      return 1;
-    do
+    error= file->ha_rnd_next(table->record[0]);
+    if (error)
     {
-      if (unlikely(error= file->ha_rnd_next(table->record[0])))
+      if (error == HA_ERR_END_OF_FILE)
       {
-        if (error == HA_ERR_END_OF_FILE)
-        {
-          error= 0;
-          break;
-        }
+        error= 0;
         break;
       }
-      if (table->field[0]->val_int() <= 0)
+      if (unlikely(error == HA_ERR_RECORD_DELETED))
       {
-        table->status |= STATUS_DELETED;
-        error|= file->ha_delete_tmp_row(table->record[0]);
-        error|= MY_TEST(error);
-        DBUG_ASSERT(!table->triggers);
+        error= 0;
+        continue;
       }
-      else if(is_next_distinct)
-      {
-        store_record(table, record[1]);
-        table->field[0]->store(1, 0);
-        error= table->file->ha_update_tmp_row(table->record[1],
-                                              table->record[0]);
-      }
-    } while (likely(!error));
-    file->ha_rnd_end();
-  }
-  else
-  {
-    DBUG_ASSERT(step == UNION_TYPE);
-  }
-  
-  /* initiate `intersect_count` to 0 for intersect */
-  if (thd->lex->current_select->next_select() &&
-       thd->lex->current_select->next_select()->get_linkage() == INTERSECT_TYPE &&
-       intersect_mark)
-  {
-    if (unlikely(file->ha_rnd_init_with_error(1)))
-      return 1;
-    do
-    {
-      if (unlikely(error= file->ha_rnd_next(table->record[0])))
-      {
-        if (error == HA_ERR_END_OF_FILE)
-        {
-          error= 0;
-          break;
-        }
-        break;
-      }
-      store_record(table, record[1]);
-      table->field[1]->store((longlong)0, 0);
-      error= table->file->ha_update_tmp_row(table->record[1],
-                                            table->record[0]);
-    } while (likely(!error));
-    file->ha_rnd_end();
-  }
+      break;
+    }
+    if (table->field[0]->val_int() != curr_step)
+      error= file->ha_delete_tmp_row(table->record[0]);
+  } while (!error);
+  file->ha_rnd_end();
 
   if (unlikely(error))
     table->file->print_error(error, MYF(0));
@@ -611,7 +507,14 @@ int select_unit_ext::send_data(List<Item> &values)
   if (table->no_rows_with_nulls)
     table->null_catch_flags= CHECK_ROW_FOR_NULLS_TO_REJECT;
 
-  fill_record_for_send_data(thd,table,values,curr_step);
+  /* fill and set record */
+  fill_record(thd, table, table->field + 1 + (intersect_mark ? 1 : 0),
+    values, TRUE, FALSE);
+  /* duplicate counter initiate to 1 */
+  table->field[0]->store((ulonglong) 1, 1);
+  /* intersect counter initiate to 0 */
+  if(intersect_mark)
+    table->field[1]->store((ulonglong) 0, 1);
 
   if (unlikely(thd->is_error()))
   {
@@ -726,7 +629,6 @@ write_record:
       rc= 1;
       goto end;
     }
-
     if (is_duplicate)
     {
       rc= -1;
@@ -786,6 +688,7 @@ bool select_unit_ext::send_eof()
       break;
     }    
     store_record(table, record[1]);
+    // store_record(table, record[2]);
     if(is_next_distinct)
     { /* set duplicate counter to 1 if next operation is distinct */
       table->field[0]->store(1, 0);
@@ -801,35 +704,18 @@ bool select_unit_ext::send_eof()
       table->field[1]->store((longlong)0, 0);
       need_update_row= TRUE;
     }
-    if(need_update_row)
-    {
-      error= table->file->ha_update_tmp_row(table->record[1],
-                                            table->record[0]);
-    }
-
-  } while (likely(!error));
-  file->ha_rnd_end();
-
-  /* delete record */
-  if (unlikely(file->ha_rnd_init_with_error(1)))
-    return 1;
-  do
-  {
-    if (unlikely(error= file->ha_rnd_next(table->record[0])))
-    {
-      if (error == HA_ERR_END_OF_FILE)
-      {
-        error= 0;
-        break;
-      }
-      break;
-    }
     if (table->field[0]->val_int() <= 0)
-    {
+    { /* need to delete this record */
       table->status |= STATUS_DELETED;
       error|= file->ha_delete_tmp_row(table->record[0]);
       DBUG_ASSERT(!table->triggers);
     }
+    else if(need_update_row)
+    { /* update row */
+      error= table->file->ha_update_tmp_row(table->record[1],
+                                            table->record[0]);
+    }
+
   } while (likely(!error));
   file->ha_rnd_end();
 
@@ -1255,48 +1141,6 @@ bool st_select_lex_unit::join_union_item_types(THD *thd_arg,
   if (unlikely(thd_arg->is_fatal_error))
     DBUG_RETURN(true); // out of memory
   DBUG_RETURN(false);
-}
-
-void select_unit::set_up_function_for_send_data(select_unit* result, bool have_duplicate, bool have_intersect)
-{
-  /* only set once (except set in constructor) */
-  if(result->is_send_data_set)
-    return;
-
-  /* determine how to call fill_record() in select_unit::send_data() */
-  if(have_duplicate && have_intersect)
-  {
-    result->fill_record_for_send_data= [](THD* thd,TABLE* table,List_item &values,uint curr_step){
-      fill_record(thd, table, table->field + 1 + 1, values, TRUE, FALSE);
-      table->field[0]->store((ulonglong) 1, 1); // duplicate counter initiate to 1
-      table->field[1]->store((ulonglong) 0, 1); // intersect counter initiate to 0
-    };
-  }
-  else if(have_duplicate && !have_intersect)
-  {
-    result->fill_record_for_send_data= [](THD* thd,TABLE* table,List_item &values,uint curr_step){
-      fill_record(thd, table, table->field + 1, values, TRUE, FALSE);
-      table->field[0]->store((ulonglong) 1, 1);
-    };
-  }
-  else if(!have_duplicate && have_intersect)
-  {
-    result->fill_record_for_send_data= [](THD* thd,TABLE* table,List_item &values,uint curr_step){
-      fill_record(thd, table, table->field + 1, values, TRUE, FALSE);
-      table->field[0]->store((ulonglong) curr_step, 1);
-    };
-  }
-  else if(!have_duplicate && !have_intersect)
-  {
-    result->fill_record_for_send_data= [](THD* thd,TABLE* table,List_item &values,uint curr_step){
-      fill_record(thd, table, table->field, values, TRUE, FALSE);
-    };
-  }
-  /* mark as setted */
-  if(!have_duplicate && !have_intersect)
-    result->is_send_data_set= FALSE;
-  else
-    result->is_send_data_set= TRUE;
 }
 
 bool st_select_lex_unit::prepare(TABLE_LIST *derived_arg,
@@ -1730,9 +1574,6 @@ cont:
       if (unlikely(error))
         goto err;
     }
-
-    if(union_result)
-      union_result->set_up_function_for_send_data(union_result, have_except_all_or_intersect_all, have_intersect);
 
     if (fake_select_lex && !fake_select_lex->first_cond_optimization)
     {
@@ -2195,12 +2036,12 @@ bool st_select_lex_unit::exec()
       if (found_rows_for_union && !sl->braces && 
           select_limit_cnt != HA_POS_ERROR)
       {
-	/*
-	  This is a union without braces. Remember the number of rows that
-	  could also have been part of the result set.
-	  We get this from the difference of between total number of possible
-	  rows and actual rows added to the temporary table.
-	*/
+  /*
+    This is a union without braces. Remember the number of rows that
+    could also have been part of the result set.
+    We get this from the difference of between total number of possible
+    rows and actual rows added to the temporary table.
+  */
 	add_rows+= (ulonglong) (thd->limit_found_rows - (ulonglong)
 			      ((table->file->stats.records -  records_at_start)));
       }
