@@ -6,6 +6,7 @@ insert into t2 values (2,2),(3,3),(5,5);
 insert into t3 values (4,4);
 create view v0(g, h) as select a,c from t1,t2;
 
+--sorted_result
 select * from t1
 UNION ALL
 select * from t2
@@ -26,12 +27,34 @@ select * from v0 where g < 4
 UNION ALL 
 select * from t3;
 
+--sorted_result
+select * from t1
+UNION ALL
+select * from t2
+INTERSECT ALL 
+(values (1,1), (2,2), (2,2), (5,5), (2,2))
+INTERSECT ALL
+select * from (select * from t1 union all select * from t1) sq
+EXCEPT ALL
+select * from t3
+UNION ALL
+select * from t2
+UNION
+select * from t3
+EXCEPT 
+select a,c from t1,t2
+UNION ALL
+select * from v0 where g < 4
+UNION ALL 
+select * from t3;
+
+--sorted_result
 select * from (
     select * from t1
     UNION ALL
     select * from t2
     INTERSECT ALL 
-    (values (1,1), (2,2), (2,2), (5,5), (2,2) order by 1)
+    (values (1,1), (2,2), (2,2), (5,5), (2,2) )
     INTERSECT ALL
     select * from (select * from t1 union all select * from t1) sq
     EXCEPT ALL
@@ -53,7 +76,7 @@ select * from t1
 UNION ALL
 select * from t2
 INTERSECT ALL 
-(values (1,1), (2,2), (2,2), (5,5), (2,2) order by 1)
+(values (1,1), (2,2), (2,2), (5,5), (2,2) )
 INTERSECT ALL
 select * from (select * from t1 union all select * from t1) sq
 EXCEPT ALL
@@ -74,7 +97,7 @@ select * from t1
 UNION ALL
 select * from t2
 INTERSECT ALL 
-(values (1,1), (2,2), (2,2), (5,5), (2,2) order by 1)
+(values (1,1), (2,2), (2,2), (5,5), (2,2) )
 INTERSECT ALL
 select * from (select * from t1 union all select * from t1) sq
 EXCEPT ALL
@@ -95,7 +118,7 @@ select * from t1
 UNION ALL
 select * from t2
 INTERSECT ALL 
-(values (1,1), (2,2), (2,2), (5,5), (2,2) order by 1)
+(values (1,1), (2,2), (2,2), (5,5), (2,2) )
 INTERSECT ALL
 select * from (select * from t1 union all select * from t1) sq
 EXCEPT ALL
@@ -116,7 +139,7 @@ PREPARE stmt from"
     UNION ALL
     select * from t2
     INTERSECT ALL 
-    (values (1,1), (2,2), (2,2), (5,5), (2,2) order by 1)
+    (values (1,1), (2,2), (2,2), (5,5), (2,2) )
     INTERSECT ALL
     select * from (select * from t1 union all select * from t1) sq
     EXCEPT ALL
@@ -133,7 +156,9 @@ PREPARE stmt from"
     select * from t3
 ";
 
+--sorted_result
 EXECUTE stmt;
+--sorted_result
 EXECUTE stmt;
 deallocate prepare stmt;
 
@@ -142,7 +167,7 @@ create view v1(i1, i2) as
     UNION ALL
     select * from t2
     INTERSECT ALL 
-    (values (1,1), (2,2), (2,2), (5,5), (2,2) order by 1)
+    (values (1,1), (2,2), (2,2), (5,5), (2,2) )
     INTERSECT ALL
     select * from (select * from t1 union all select * from t1) sq
     EXCEPT ALL
@@ -169,7 +194,7 @@ let $q=
     UNION ALL
     select * from t2
     INTERSECT ALL 
-    (values (1,1), (2,2), (2,2), (5,5), (2,2) order by 1)
+    (values (1,1), (2,2), (2,2), (5,5), (2,2) )
     INTERSECT ALL
     select * from (select * from t1 union all select * from t1) sq
     EXCEPT ALL

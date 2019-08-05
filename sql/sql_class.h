@@ -5743,14 +5743,19 @@ public:
 class select_unit_ext :public select_unit
 {
 public:
-  select_unit_ext(THD *thd_arg):
-    select_unit(thd_arg), offset(0), increment(0){};
+  select_unit_ext(THD *thd_arg, st_select_lex* _union_distinct):
+    select_unit(thd_arg), offset(0), increment(0), is_index(TRUE)
+  {
+    union_distinct = _union_distinct;
+  };
   int send_data(List<Item> &items);
   void change_select();
   bool send_eof();
-
+  
   int offset;
   int increment;
+  bool is_index;
+  st_select_lex* union_distinct;
 };
 
 class select_union_recursive :public select_unit

@@ -17,11 +17,23 @@ explain extended
 explain extended
 (select e,f from t3) intersect (select c,d from t2) union (select a,b from t1) union (select 4,4);
 
+create table t12(c1 int);
+insert into t12 values(1);
+insert into t12 values(2);
+create table t13(c1 int);
+insert into t13 values(1);
+insert into t13 values(3);
+create table t234(c1 int);
+insert into t234 values(2);
+insert into t234 values(3);
+insert into t234 values(4);
+
 --sorted_result
 select * from t13 union select * from t234 intersect select * from t12;
 set SQL_MODE=default;
 
 drop table t1,t2,t3;
+drop table t12,t13, t234;
 
 #from intersect_all.test
 create table t1 (a int, b blob) engine=MyISAM;
