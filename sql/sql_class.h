@@ -5690,14 +5690,14 @@ public:
   enum sub_select_type step;
   bool is_distinct;
 public:
-  Item_int *intersect_mark, *duplicate_cnt;
+  Item_int *addon_fields, *duplicate_cnt;
   TMP_TABLE_PARAM tmp_table_param;
   int write_err; /* Error code from the last send_data->ha_write_row call. */
   TABLE *table;
 
   select_unit(THD *thd_arg):
     select_result_interceptor(thd_arg),
-    intersect_mark(0), duplicate_cnt(0), table(0), is_send_data_set(FALSE)
+    addon_fields(0), duplicate_cnt(0), table(0), is_send_data_set(FALSE)
   {
     init();
     tmp_table_param.init();
@@ -5714,6 +5714,7 @@ public:
   virtual bool postponed_prepare(List<Item> &types)
   { return false; }
   int send_data(List<Item> &items);
+  int write_record();
   bool is_send_data_set;
   bool send_eof();
   virtual bool flush();

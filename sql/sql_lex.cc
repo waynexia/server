@@ -2348,7 +2348,7 @@ void st_select_lex_unit::init_query()
   select_limit_cnt= HA_POS_ERROR;
   offset_limit_cnt= 0;
   union_distinct= 0;
-  prepared= optimized= optimized_2= executed= bag_optimized= 0;
+  prepared= optimized= optimized_2= stored= executed= bag_optimized= 0;
   optimize_started= 0;
   item= 0;
   union_result= 0;
@@ -2364,7 +2364,7 @@ void st_select_lex_unit::init_query()
   with_clause= 0;
   with_element= 0;
   columns_are_renamed= false;
-  intersect_mark= NULL;
+  addon_fields= NULL;
   duplicate_cnt = NULL;
   with_wrapped_tvc= false;
 }
@@ -2995,7 +2995,7 @@ void st_select_lex_unit::print(String *str, enum_query_type query_type)
         DBUG_ASSERT(0);
       case UNION_TYPE:
         str->append(STRING_WITH_LEN(" union "));
-        if (union_all)
+        if (union_all || ((thd->lex->context_analysis_only & CONTEXT_ANALYSIS_ONLY_VIEW) && !sl->saved_distinct))
           str->append(STRING_WITH_LEN("all "));
         break;
       case INTERSECT_TYPE:

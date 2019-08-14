@@ -720,6 +720,7 @@ public:
   }
   enum sub_select_type get_linkage() { return linkage; }
   bool distinct;
+  bool saved_distinct;
   bool no_table_names_allowed; /* used for global order by */
 
   static void *operator new(size_t size, MEM_ROOT *mem_root) throw ()
@@ -852,6 +853,7 @@ public:
   bool  prepared, // prepare phase already performed for UNION (unit)
     optimized, // optimize phase already performed for UNION (unit)
     optimized_2,
+    stored,
     executed, // already executed
     cleaned,
     bag_optimized;
@@ -872,7 +874,7 @@ public:
     There is INTERSECT and it is item used in creating temporary
     table for it
   */
-  Item_int *intersect_mark, *duplicate_cnt;
+  Item_int *addon_fields, *duplicate_cnt;
   /**
      TRUE if the unit contained TVC at the top level that has been wrapped
      into SELECT:
@@ -1523,6 +1525,11 @@ public:
   Item *pushdown_from_having_into_where(THD *thd, Item *having);
 
   select_handler *find_select_handler(THD *thd);
+
+  bool is_set_op()
+  {
+    return linkage == UNION_TYPE || linkage == EXCEPT_TYPE || linkage == INTERSECT_TYPE;
+  }
 
 private:
   bool m_non_agg_field_used;
