@@ -73,7 +73,7 @@ void select_unit::change_select()
   switch (step)
   {
   case INTERSECT_TYPE:
-    addon_fields->value= prev_step= curr_step;
+    addon_fields[1]->value= prev_step= curr_step;
     curr_step= current_select_number;
     break;
   case EXCEPT_TYPE:
@@ -123,9 +123,9 @@ int select_unit::send_data(List<Item> &values)
     table->null_catch_flags= CHECK_ROW_FOR_NULLS_TO_REJECT;
   
   /* fill and set record */
-  fill_record(thd, table, table->field + (addon_fields ? 1 : 0),
+  fill_record(thd, table, table->field + (addon_fields[1] ? 1 : 0),
     values, TRUE, FALSE);
-  if(addon_fields)
+  if(addon_fields[1])
     table->field[0]->store((ulonglong) curr_step, 1);
 
   if (unlikely(thd->is_error()))
@@ -413,6 +413,7 @@ select_union_recursive::create_result_table(THD *thd_arg,
 /*
   @brief
     Write a record
+
   @detail
     return 0 for no error and 1 for error.
     -1 means we found a duplicate key.
@@ -468,6 +469,7 @@ void select_unit::cleanup()
 /*
   @brief
     Set up value needed by send_data()
+
   @detail
     - For EXCEPT we will decrease the counter by one
     and INTERSECT / UNION we increase the counter.
@@ -495,6 +497,7 @@ void select_unit_ext::change_select()
 /*
   @brief
     Fill temporary tables for operations need extra fields
+
   @detail
     - If this operation is not distinct, we try to find it and increase the 
     counter by "increment" setted in select_unit_ext::change_select().
@@ -521,12 +524,12 @@ int select_unit_ext::send_data(List<Item> &values)
     table->null_catch_flags= CHECK_ROW_FOR_NULLS_TO_REJECT;
 
   /* fill and set record */
-  fill_record(thd, table, table->field + 1 + (addon_fields ? 1 : 0),
+  fill_record(thd, table, table->field + 1 + (addon_fields[1] ? 1 : 0),
                  values, TRUE, FALSE);
   /* duplicate counter initiate to 1 */
   table->field[0]->store((ulonglong) 1, 1);
   /* intersect counter initiate to 0 */
-  if(addon_fields)
+  if(addon_fields[1])
     table->field[1]->store((ulonglong) 0, 1);
 
   if (unlikely(thd->is_error()))
@@ -545,7 +548,7 @@ int select_unit_ext::send_data(List<Item> &values)
   }
 
   if(!is_distinct)
-  {/* not distinct */
+  {
     if(!is_index && step == UNION_TYPE)
     { 
       rc= write_record();
@@ -605,10 +608,11 @@ int select_unit_ext::send_data(List<Item> &values)
       break;
 
     case INTERSECT_TYPE:
-      if (!(find_res= table->file->find_unique_row(table->record[0], 0)))
+      if (!(find_res= table->file->find_unique_row(table->record[0], 0)) &&
+          table->field[0]->val_int() == prev_step)
       {
         store_record(table, record[1]);
-        table->field[1]->store(1, 0);
+        table->field[0]->store((ulonglong) curr_step, 0);
         not_reported_error= table->file->ha_update_tmp_row(table->record[1],
                                                             table->record[0]);
         rc= MY_TEST(not_reported_error);
@@ -640,80 +644,94 @@ end:
 /*
   @brief
     Do post-operation after a operator
+
   @detail
-    -If next is distinct set duplicate counter to 1
-    -If next is intersect set intersect counter to 0
-    -If this one is intersect set duplicate counter to the minimal between
+    - If next is distinct set duplicate counter to 1
+    - If next is intersect set intersect counter to 0
+    - If this one is intersect set duplicate counter to the minimal between
       duplicate counter and intersect counter
-    -If a record's duplicate counter is lesser then 1 we delete it.
-    -In the end of the whole sequence we unfold duplicate records
+    - If a record's duplicate counter is lesser then 1 we delete it.
+    - In the end of the whole sequence we unfold duplicate records
 */
 
 bool select_unit_ext::send_eof()
 {
   handler *file= table->file;
-  int error;
-  bool is_next_distinct= thd->lex->current_select->next_select() &&
-    thd->lex->current_select->next_select()->distinct;
-  bool is_next_intersect = thd->lex->current_select->next_select() &&
-    thd->lex->current_select->next_select()->get_linkage() == INTERSECT_TYPE &&
-    addon_fields;
+  int error= 0;
+  SELECT_LEX *next_sl= thd->lex->current_select->next_select();
+  bool is_next_distinct= next_sl && next_sl->distinct;
+  bool is_next_intersect_all= next_sl && next_sl->get_linkage() == INTERSECT_TYPE && !is_distinct;
+  bool is_last_intersect_distinct= step == INTERSECT_TYPE && is_distinct &&
+    next_sl && next_sl->get_linkage() != INTERSECT_TYPE;
   /* index can be disabled at the end of sequence or after the node which
      followed sequence only contains UNION ALL */
-  bool can_disable_index = (! thd->lex->current_select->next_select() ||
-    (thd->lex->current_select->next_select() && 
-    ! thd->lex->current_select->next_select()->is_linkage_set()) ||
-    thd->lex->current_select == union_distinct);
+  bool can_disable_index= thd->lex->current_select == union_distinct || ! next_sl;
   /* whether need to call ha_update_tmp_row() */
   bool need_update_row;
+  /* if this and next are UNION ALL we need not to scan file */
+  bool need_scan_file= is_next_distinct || is_last_intersect_distinct ||
+    is_next_intersect_all || (step == INTERSECT_TYPE && !is_distinct) || 
+    step != UNION_TYPE ;
 
-  if (unlikely(file->ha_rnd_init_with_error(1)))
-    return 1;
-  do
+  if (need_scan_file)
   {
-    need_update_row= FALSE;
-    if (unlikely(error= file->ha_rnd_next(table->record[0])))
+    if (unlikely(file->ha_rnd_init_with_error(1)))
+      return 1;
+    do
     {
-      if (error == HA_ERR_END_OF_FILE)
+      need_update_row= FALSE;
+      if (unlikely(error= file->ha_rnd_next(table->record[0])))
       {
-        error= 0;
+        if (error == HA_ERR_END_OF_FILE)
+        {
+          error= 0;
+          break;
+        }
         break;
+      }    
+      store_record(table, record[1]);
+      if (!is_distinct && is_next_distinct)
+      { /* set duplicate counter to 1 if next operation is distinct */
+        table->field[0]->store(1, 0);
+        need_update_row= TRUE;
       }
-      break;
-    }    
-    store_record(table, record[1]);
-    // store_record(table, record[2]);
-    if(is_next_distinct)
-    { /* set duplicate counter to 1 if next operation is distinct */
-      table->field[0]->store(1, 0);
-      need_update_row= TRUE;
-    }
-    if (step == INTERSECT_TYPE && table->field[0]->val_int() > table->field[1]->val_int())
-    { /* take minimal between `counter` and `intersect_counter` for INTERSECT */
-      table->field[0]->store(table->field[1]->val_int(), 0);
-      need_update_row= TRUE;
-    }
-    if(is_next_intersect)
-    { /* initiate `intersect_count` to 0 for intersect */
-      table->field[1]->store((longlong)0, 0);
-      need_update_row= TRUE;
-    }
-    if (table->field[0]->val_int() <= 0)
-    { /* need to delete this record */
-      table->status |= STATUS_DELETED;
-      error|= file->ha_delete_tmp_row(table->record[0]);
-      DBUG_ASSERT(!table->triggers);
-    }
-    else if(need_update_row)
-    { /* update row */
-      error= table->file->ha_update_tmp_row(table->record[1],
-                                            table->record[0]);
-    }
-  } while (likely(!error));
-  file->ha_rnd_end();
+      if (step == INTERSECT_TYPE && !is_distinct && 
+        table->field[0]->val_int() > table->field[1]->val_int())
+      { /* take minimal between `counter` and `intersect_counter` for INTERSECT */
+        table->field[0]->store(table->field[1]->val_int(), 0);
+        need_update_row= TRUE;
+      }
+      else if (is_last_intersect_distinct)
+      { /* omit record in the end of INTERSECT DISTINCT sequence */
+        if(table->field[0]->val_int() == curr_step)
+          table->field[0]->store((longlong)1, 0);
+        else
+          table->field[0]->store((longlong)0, 0);
+        need_update_row= TRUE;
+      }
+      if (is_next_intersect_all)
+      { /* initiate `intersect_count` to 0 for intersect */
+        table->field[1]->store((longlong)0, 0);
+        need_update_row= TRUE;
+      }
+      if (table->field[0]->val_int() == 0)
+      { /* need to delete this record */
+        table->status |= STATUS_DELETED;
+        error|= file->ha_delete_tmp_row(table->record[0]);
+        DBUG_ASSERT(!table->triggers);
+      }
+      else if (need_update_row)
+      { 
+        error= table->file->ha_update_tmp_row(table->record[1],
+                                              table->record[0]);
+      }
+    } while (likely(!error));
+    file->ha_rnd_end();
+  }
+  
 
   /* disable index and unfold */
-  if(can_disable_index && is_index)
+  if (can_disable_index && is_index)
   {
     table->file->ha_disable_indexes(HA_KEY_SWITCH_ALL); /* disable index to insert duplicate records */
     is_index= FALSE;
@@ -733,13 +751,15 @@ bool select_unit_ext::send_eof()
         break;
       }
       dup_cnt= table->field[0]->val_int();
+      if (dup_cnt == 1)
+        continue;
       store_record(table, record[1]);
       table->field[0]->store((longlong)1, 0);
       error= table->file->ha_update_tmp_row(table->record[1],
                                             table->record[0]);
-      for(int _cnt= 1; _cnt <= dup_cnt -1; ++_cnt)
+      while (--dup_cnt)
       {
-        if(likely((table->file->ha_write_tmp_row(table->record[0]))))
+        if(write_record() == 1)
         {
           error= 1;
           break;
@@ -762,7 +782,7 @@ bool select_unit_ext::send_eof()
   if (unlikely(error))
     table->file->print_error(error, MYF(0));
 
-  return(MY_TEST(error));
+  return (MY_TEST(error));
 }
 
 void select_union_recursive::cleanup()
@@ -863,10 +883,7 @@ int select_union_direct::send_data(List<Item> &items)
   }
 
   send_records++;
-  if(duplicate_cnt)
-    fill_record(thd, table, table->field + 1, items, true, false);
-  else
-    fill_record(thd, table, table->field, items, true, false);
+  fill_record(thd, table, table->field, items, true, false);
   if (unlikely(thd->is_error()))
     return true; /* purecov: inspected */
 
@@ -1136,6 +1153,30 @@ bool st_select_lex_unit::join_union_item_types(THD *thd_arg,
     DBUG_RETURN(true); // out of memory
   DBUG_RETURN(false);
 }
+
+
+bool init_item_int(THD* thd, Item_int* &item)
+{
+  if (!item)
+  {
+    Query_arena *arena, backup_arena;
+    arena= thd->activate_stmt_arena_if_needed(&backup_arena);
+
+    item= new (thd->mem_root) Item_int(thd, 0);
+
+    if (arena)
+      thd->restore_active_arena(arena, &backup_arena);
+
+    if (!item)
+    return false;
+  }
+  else
+  {
+    item->value= 0;
+  }
+  return true;
+}
+
 
 bool st_select_lex_unit::prepare(TABLE_LIST *derived_arg,
                                  select_result *sel_result,
@@ -1520,55 +1561,19 @@ cont:
       {
         // add duplicate_count
         ++hidden;
-        if (!duplicate_cnt)
-        {
-          Query_arena *arena, backup_arena;
-          arena= thd->activate_stmt_arena_if_needed(&backup_arena);
-
-          duplicate_cnt= new (thd->mem_root) Item_int(thd, 0);
-
-          if (arena)
-            thd->restore_active_arena(arena, &backup_arena);
-
-          if (!duplicate_cnt)
-            goto err;
-        }
-        else
-        {
-          duplicate_cnt->value= 0;
-        }
-        types.push_front(union_result->duplicate_cnt= duplicate_cnt);
-        union_result->duplicate_cnt->name.str= "__CNT_1";
-        union_result->duplicate_cnt->name.length= 7;
+        init_item_int(thd, addon_fields[0]);
+        types.push_front(union_result->addon_fields[0]= addon_fields[0]);
+        union_result->addon_fields[0]->name.str= "__CNT_1";
+        union_result->addon_fields[0]->name.length= 7;
       }
       // add addon_fields
       if (have_intersect)
       {
         ++hidden;
-        if (!addon_fields)
-        {
-          /*
-            For intersect we add a hidden column first that contains
-            the current select number of the time when the row was
-            added to the temporary table
-          */
-
-          Query_arena *arena, backup_arena;
-          arena= thd->activate_stmt_arena_if_needed(&backup_arena);
-
-          addon_fields= new (thd->mem_root) Item_int(thd, 0);
-
-          if (arena)
-            thd->restore_active_arena(arena, &backup_arena);
-
-          if (!addon_fields)
-            goto err;
-        }
-        else
-          addon_fields->value= 0; //reset
-        types.push_front(union_result->addon_fields= addon_fields);
-        union_result->addon_fields->name.str= "__CNT_2";
-        union_result->addon_fields->name.length= 7;
+        init_item_int(thd, addon_fields[1]);
+        types.push_front(union_result->addon_fields[1]= addon_fields[1]);
+        union_result->addon_fields[1]->name.str= "__CNT_2";
+        union_result->addon_fields[1]->name.length= 7;
       }      
       bool error=
         union_result->create_result_table(thd, &types,
@@ -1655,8 +1660,8 @@ cont:
         We're in execution of a prepared statement or stored procedure:
         reset field items to point at fields from the created temporary table.
       */
-      table->reset_item_list(&item_list, (addon_fields ? 1 : 0) +
-                                         (duplicate_cnt ? 1 : 0));
+      table->reset_item_list(&item_list, (addon_fields[0] ? 1 : 0) +
+                                         (addon_fields[1] ? 1 : 0));
     }
     if (fake_select_lex != NULL &&
         (thd->stmt_arena->is_stmt_prepare() ||
@@ -1723,10 +1728,11 @@ void st_select_lex_unit::optimize_bag_operation()
   SELECT_LEX *intersect_start= NULL;
   /* The first select after the INTERSECT subsequence */
   SELECT_LEX *intersect_end= NULL;
-  /* Ultimately it will contain the last select with distinct == true */
-  SELECT_LEX *last_distinct= NULL;  
-  /* Points to the last node before UNION ALL sequence */
-  SELECT_LEX *disable_index= NULL;
+  /* 
+    Will point to the last node before UNION ALL subsequence. 
+    Index can be disable there. 
+  */
+  SELECT_LEX *disable_index= NULL;  
   /* 
     True if there is a select with:
     linkage == INTERSECT_TYPE && distinct==true
@@ -1748,29 +1754,14 @@ void st_select_lex_unit::optimize_bag_operation()
       if (sl->distinct)
       {
         any_intersect_distinct= true;
-        last_distinct = sl;
+        disable_index = sl;
       }
     }
   }
   /* The first select of the current UNION ALL subsequence */
   SELECT_LEX *union_all_start= NULL;
-  SELECT_LEX *next_sl;
   for ( ; sl; prev_sl= sl, sl = sl->next_select())
   {
-    next_sl= sl->next_select();
-    /* figure out at what time we can disable index */
-    if(next_sl)
-    {
-      if (next_sl->linkage == UNION_TYPE && !next_sl->distinct)
-      {
-        /* next is UNION ALL */
-        if(!disable_index)
-          disable_index= sl;
-      }
-      else
-        disable_index= NULL;
-    }
-
     DBUG_ASSERT (sl->linkage != INTERSECT_TYPE);
     if (!sl->distinct)
     {
@@ -1779,31 +1770,28 @@ void st_select_lex_unit::optimize_bag_operation()
         if (!union_all_start)
         {
           union_all_start= sl;
-          disable_index= prev_sl;
         }
       }
       else
       { 
         DBUG_ASSERT (sl->linkage == EXCEPT_TYPE);
         union_all_start= NULL;
-        disable_index= NULL;
         if (prev_sl->distinct && prev_sl->is_set_op())
         {
           sl->distinct= true;
-          last_distinct = sl;
+          disable_index = sl;
         }
       }
     }
     else
     { /* sl->distinct == true */ 
       union_all_start= NULL;
-      disable_index= NULL;
       /* dead code */
       for (SELECT_LEX *si= union_all_start; si && si != sl; si= si->next_select())
       {
           si->distinct= true;
       }
-      last_distinct= sl;
+      disable_index= sl;
     }
   }
   if (any_intersect_distinct ||
@@ -1812,25 +1800,19 @@ void st_select_lex_unit::optimize_bag_operation()
     for (sl= intersect_start; sl && sl != intersect_end; sl= sl->next_select())
     {
       sl->distinct= true;
-      if (last_distinct->linkage == INTERSECT_TYPE)
-        last_distinct= sl;
+      if (disable_index->linkage == INTERSECT_TYPE)
+        disable_index= sl;
     }
   }
   /*
-    if last_distinct points to a INTERSECT, based on rule 1 we can set it
+    if disable_index points to a INTERSECT, based on rule 1 we can set it
     to the last INTERSECT node.
   */
-  if(last_distinct && last_distinct->linkage == INTERSECT_TYPE && 
+  if(disable_index && disable_index->linkage == INTERSECT_TYPE && 
     intersect_end && intersect_end->distinct)
-    last_distinct= intersect_end;
-  /* 
-    If have "duplicate_cnt", "union_distinct" is the node when we can disable index.
-    Otherwise "union_distinct" points to the last DISTINCT node.
-  */
-  if(duplicate_cnt)
-    union_distinct= disable_index;
-  else
-    union_distinct= last_distinct;
+    disable_index= intersect_end;
+  /* union_distinct controls when to disable index */
+  union_distinct= disable_index;
   /* mark as optimized */
   bag_optimized= TRUE;
 }
@@ -2039,7 +2021,7 @@ bool st_select_lex_unit::exec()
 	  sl->tvc->exec(sl);
 	else
 	  sl->join->exec();
-        if (sl == union_distinct && !(with_element && with_element->is_recursive) && !duplicate_cnt)
+        if (sl == union_distinct && !(with_element && with_element->is_recursive) && !addon_fields[0])
 	{
           // This is UNION DISTINCT, so there should be a fake_select_lex
           DBUG_ASSERT(fake_select_lex != NULL);

@@ -2364,8 +2364,7 @@ void st_select_lex_unit::init_query()
   with_clause= 0;
   with_element= 0;
   columns_are_renamed= false;
-  addon_fields= NULL;
-  duplicate_cnt = NULL;
+  addon_fields[0]= addon_fields[1]= NULL;
   with_wrapped_tvc= false;
 }
 

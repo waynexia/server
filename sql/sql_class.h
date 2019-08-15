@@ -5690,15 +5690,15 @@ public:
   enum sub_select_type step;
   bool is_distinct;
 public:
-  Item_int *addon_fields, *duplicate_cnt;
+  Item_int *addon_fields[2];
   TMP_TABLE_PARAM tmp_table_param;
   int write_err; /* Error code from the last send_data->ha_write_row call. */
   TABLE *table;
 
   select_unit(THD *thd_arg):
-    select_result_interceptor(thd_arg),
-    addon_fields(0), duplicate_cnt(0), table(0), is_send_data_set(FALSE)
+    select_result_interceptor(thd_arg), table(0), is_send_data_set(FALSE)
   {
+    addon_fields[0]= addon_fields[1]= 0;
     init();
     tmp_table_param.init();
   }
