@@ -2364,8 +2364,8 @@ void st_select_lex_unit::init_query()
   with_clause= 0;
   with_element= 0;
   columns_are_renamed= false;
-  addon_fields[0]= addon_fields[1]= NULL;
   with_wrapped_tvc= false;
+  is_select_unit_ext= false;
 }
 
 void st_select_lex::init_query()
@@ -2981,7 +2981,7 @@ bool st_select_lex::setup_ref_array(THD *thd, uint order_group_num)
 
 void st_select_lex_unit::print(String *str, enum_query_type query_type)
 {
-  bool union_all= !union_distinct;
+  // bool union_all= !union_distinct;
   if (with_clause)
     with_clause->print(str, query_type);
   for (SELECT_LEX *sl= first_select(); sl; sl= sl->next_select())
@@ -2994,7 +2994,7 @@ void st_select_lex_unit::print(String *str, enum_query_type query_type)
         DBUG_ASSERT(0);
       case UNION_TYPE:
         str->append(STRING_WITH_LEN(" union "));
-        if (union_all || ((thd->lex->context_analysis_only & CONTEXT_ANALYSIS_ONLY_VIEW) && !sl->saved_distinct))
+        if (!sl->distinct)
           str->append(STRING_WITH_LEN("all "));
         break;
       case INTERSECT_TYPE:
@@ -3008,8 +3008,8 @@ void st_select_lex_unit::print(String *str, enum_query_type query_type)
           str->append(STRING_WITH_LEN("all "));
         break;
       }
-      if (sl == union_distinct)
-        union_all= TRUE;
+      // if (sl == union_distinct)
+      //   union_all= TRUE;
     }
     if (sl->braces)
       str->append('(');

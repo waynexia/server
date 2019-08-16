@@ -871,11 +871,6 @@ public:
   */
   List<Item> types;
   /**
-    There is INTERSECT and it is item used in creating temporary
-    table for it
-  */
-  Item_int *addon_fields[2];
-  /**
      TRUE if the unit contained TVC at the top level that has been wrapped
      into SELECT:
      VALUES (v1) ... (vn) => SELECT * FROM (VALUES (v1) ... (vn)) as tvc
@@ -932,7 +927,8 @@ public:
   */
   st_select_lex *saved_fake_select_lex;
 
-  st_select_lex *union_distinct; /* pointer to the last UNION DISTINCT */
+  st_select_lex *union_distinct; /* pointer to the last node before last subsequence of UNION ALL */
+  bool is_select_unit_ext; /* is union_result a object of class select_unit_ext or not */
   bool describe; /* union exec() called for EXPLAIN */
   Procedure *last_procedure;     /* Pointer to procedure, if such exists */
 

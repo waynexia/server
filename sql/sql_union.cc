@@ -73,7 +73,7 @@ void select_unit::change_select()
   switch (step)
   {
   case INTERSECT_TYPE:
-    addon_fields[1]->value= prev_step= curr_step;
+    prev_step= curr_step;
     curr_step= current_select_number;
     break;
   case EXCEPT_TYPE:
@@ -110,7 +110,7 @@ INTESECT:
 */
 int select_unit::send_data(List<Item> &values)
 {
-  int rc;
+  int rc= 0;
   int not_reported_error= 0;
   if (unit->offset_limit_cnt)
   {						// using limit offset,count
@@ -122,16 +122,23 @@ int select_unit::send_data(List<Item> &values)
   if (table->no_rows_with_nulls)
     table->null_catch_flags= CHECK_ROW_FOR_NULLS_TO_REJECT;
   
-  /* fill and set record */
-  fill_record(thd, table, table->field + (addon_fields[1] ? 1 : 0),
-    values, TRUE, FALSE);
-  if(addon_fields[1])
-    table->field[0]->store((ulonglong) curr_step, 1);
+  fill_record(thd, table, table->field + addon_cnt, values, TRUE, FALSE);
+  /* set up initial value for records that need to be written */
+  if(addon_cnt && step == UNION_TYPE)
+  {
+    DBUG_ASSERT(addon_cnt == 1);
+    table->field[0]->store((longlong) curr_step, 1);
+  }
 
   if (unlikely(thd->is_error()))
   {
     rc= 1;
-    goto end;
+    if (unlikely(not_reported_error))
+    {
+      DBUG_ASSERT(rc);
+      table->file->print_error(not_reported_error, MYF(0));
+    }
+    return rc;
   }
   if (table->no_rows_with_nulls)
   {
@@ -139,7 +146,12 @@ int select_unit::send_data(List<Item> &values)
     if (table->null_catch_flags)
     {
       rc= 0;
-      goto end;
+      if (unlikely(not_reported_error))
+      {
+        DBUG_ASSERT(rc);
+        table->file->print_error(not_reported_error, MYF(0));
+      }
+      return rc;
     }
   }
 
@@ -149,7 +161,6 @@ int select_unit::send_data(List<Item> &values)
   {
   case UNION_TYPE:
     rc= write_record();
-    goto end;
     break;
 
   case EXCEPT_TYPE:
@@ -158,18 +169,9 @@ int select_unit::send_data(List<Item> &values)
       checking unique constrain.
     */
     if (!(find_res= table->file->find_unique_row(table->record[0], 0)))
-    {
-      DBUG_ASSERT(!table->triggers);
-      table->status|= STATUS_DELETED;
-      not_reported_error= table->file->ha_delete_tmp_row(table->record[0]);
-      rc= MY_TEST(not_reported_error);
-      goto end;
-    }
+      rc= delete_record();
     else
-    {
-      if ((rc= not_reported_error= (find_res != 1)))
-        goto end;
-    }
+      rc= not_reported_error= (find_res != 1);
     break;
   case INTERSECT_TYPE:
     /*
@@ -179,31 +181,23 @@ int select_unit::send_data(List<Item> &values)
     if (!(find_res= table->file->find_unique_row(table->record[0], 0)))
     {
       DBUG_ASSERT(!table->triggers);
-      if (table->field[0]->val_int() != prev_step)
+      if (table->field[0]->val_int() == prev_step)
       {
-        rc= 0;
-        goto end;
+        store_record(table, record[1]);
+        table->field[0]->store(curr_step, 0);
+        not_reported_error= table->file->ha_update_tmp_row(table->record[1],
+                                                            table->record[0]);
+        rc= MY_TEST(not_reported_error);
+        DBUG_ASSERT(rc != HA_ERR_RECORD_IS_THE_SAME);
       }
-      store_record(table, record[1]);
-      table->field[0]->store(curr_step, 0);
-      not_reported_error= table->file->ha_update_tmp_row(table->record[1],
-                                                          table->record[0]);
-      rc= MY_TEST(not_reported_error);
-      DBUG_ASSERT(rc != HA_ERR_RECORD_IS_THE_SAME);
-      goto end;
     }
     else
-    {
-      if ((rc= not_reported_error= (find_res != 1)))
-        goto end;
-    }
+      rc= not_reported_error= (find_res != 1);
     break;
   default:
     DBUG_ASSERT(0);
   }
-  rc= 0;
 
-end:
   if (unlikely(not_reported_error))
   {
     DBUG_ASSERT(rc);
@@ -256,7 +250,7 @@ bool select_unit::send_eof()
       break;
     }
     if (table->field[0]->val_int() != curr_step)
-      error= file->ha_delete_tmp_row(table->record[0]);
+      error= delete_record();
   } while (!error);
   file->ha_rnd_end();
 
@@ -414,9 +408,10 @@ select_union_recursive::create_result_table(THD *thd_arg,
   @brief
     Write a record
 
-  @detail
-    return 0 for no error and 1 for error.
-    -1 means we found a duplicate key.
+  @retval
+    -1  found a duplicate key
+    0   no error
+    1   if an error is reported
 
 */
 
@@ -450,6 +445,23 @@ int select_unit::write_record()
   return 0;
 }
 
+
+/*
+  @brief
+    Delete a record
+
+  @retval
+    0   no error
+    1   if an error is reported
+*/
+
+int select_unit::delete_record()
+{
+  DBUG_ASSERT(!table->triggers);
+  table->status|= STATUS_DELETED;
+  int not_reported_error= table->file->ha_delete_tmp_row(table->record[0]);
+  return MY_TEST(not_reported_error);
+}
 
 /**
   Reset and empty the temporary table that stores the materialized query
@@ -510,7 +522,7 @@ void select_unit_ext::change_select()
 
 int select_unit_ext::send_data(List<Item> &values)
 {
-  int rc;
+  int rc= 0;
   int not_reported_error= 0;
   int find_res;
   if (unit->offset_limit_cnt)
@@ -523,19 +535,26 @@ int select_unit_ext::send_data(List<Item> &values)
   if (table->no_rows_with_nulls)
     table->null_catch_flags= CHECK_ROW_FOR_NULLS_TO_REJECT;
 
-  /* fill and set record */
-  fill_record(thd, table, table->field + 1 + (addon_fields[1] ? 1 : 0),
-                 values, TRUE, FALSE);
-  /* duplicate counter initiate to 1 */
-  table->field[0]->store((ulonglong) 1, 1);
-  /* intersect counter initiate to 0 */
-  if(addon_fields[1])
-    table->field[1]->store((ulonglong) 0, 1);
+  fill_record(thd, table, table->field + addon_cnt, values, TRUE, FALSE);
+  /* set up initial value for records that need to be written */
+  if( step == UNION_TYPE )
+  {
+    /* duplicate counter initiate to 1 */
+    table->field[0]->store((longlong) 1, 1);
+    /* intersect counter initiate to 0 if have*/
+    if (addon_cnt == 2)
+      table->field[1]->store((longlong) 0, 1);
+  }
 
   if (unlikely(thd->is_error()))
   {
     rc= 1;
-    goto end;
+    if (unlikely(not_reported_error))
+    {
+      DBUG_ASSERT(rc);
+      table->file->print_error(not_reported_error, MYF(0));
+    }
+    return rc;
   }
   if (table->no_rows_with_nulls)
   {
@@ -543,42 +562,50 @@ int select_unit_ext::send_data(List<Item> &values)
     if (table->null_catch_flags)
     {
       rc= 0;
-      goto end;
+      if (unlikely(not_reported_error))
+      {
+        DBUG_ASSERT(rc);
+        table->file->print_error(not_reported_error, MYF(0));
+      }
+      return rc;
     }
   }
 
   if(!is_distinct)
   {
-    if(!is_index && step == UNION_TYPE)
-    { 
+    /* in the last UNION ALL subsequence */
+    if(!is_index_enabled && step == UNION_TYPE)
       rc= write_record();
-      goto end;
-    }
-    if(!(find_res= table->file->find_unique_row(table->record[0], 0)))
-    {/* found this record, then increase the counter by delta */
+
+    /* found this record, then increase the counter by delta */
+    else if(!(find_res= table->file->find_unique_row(table->record[0], 0)))
+    {
       store_record(table, record[1]);
       longlong cnt= table->field[offset]->val_int()+ increment;
-      if (cnt < 0)
-        cnt= 0;
-      table->field[offset]->store(cnt, 0);
-      not_reported_error|= table->file->ha_update_tmp_row(table->record[1],
-                                                        table->record[0]);
-      DBUG_ASSERT(!table->triggers);
-      rc= MY_TEST(not_reported_error);
-      goto end;
-    }
-    else
-    {/* not found */
-      if(step == UNION_TYPE)
-      {/* is union type, need to write this record into table*/
-        rc= write_record();
-        goto end;
+      /* this record is not exist */
+      if (cnt == 0)
+        rc= delete_record();
+      /* 
+        in INTERSECT ALL if the incremented counter is greater than the 
+        second one then we don't have to update
+      */
+      else if( !(step == INTERSECT_TYPE && cnt > table->field[1 - offset]->val_int()))
+      {
+        table->field[offset]->store(cnt, 0);
+        not_reported_error|= table->file->ha_update_tmp_row(table->record[1],
+                                                          table->record[0]);
+        DBUG_ASSERT(!table->triggers);
+        rc= MY_TEST(not_reported_error);
       }
-      else
-      {/* is intersect or except type, need not to process */
+    }
+    else  /* not found */
+    {
+      if(step == UNION_TYPE)  /* is union type, need to write this record into table */
+        rc= write_record();
+      else  /* is intersect or except type, need not to process */
+      {
         DBUG_ASSERT(step == INTERSECT_TYPE || step == EXCEPT_TYPE);
         rc= 0;
-        goto end;
       }
     }
   }
@@ -588,50 +615,39 @@ int select_unit_ext::send_data(List<Item> &values)
     {
     case UNION_TYPE:
       rc= write_record();
-      goto end;
       break;
 
     case EXCEPT_TYPE:
       if (!(find_res= table->file->find_unique_row(table->record[0], 0)))
-      {
-        DBUG_ASSERT(!table->triggers);
-        table->status|= STATUS_DELETED;
-        not_reported_error= table->file->ha_delete_tmp_row(table->record[0]);
-        rc= MY_TEST(not_reported_error);
-        goto end;
-      }
+        rc= delete_record();
       else
-      {
-        if ((rc= not_reported_error= (find_res != 1)))
-          goto end;
-      }
+        rc= not_reported_error= (find_res != 1);
       break;
 
     case INTERSECT_TYPE:
-      if (!(find_res= table->file->find_unique_row(table->record[0], 0)) &&
-          table->field[0]->val_int() == prev_step)
+      if (!(find_res= table->file->find_unique_row(table->record[0], 0))) 
       {
-        store_record(table, record[1]);
-        table->field[0]->store((ulonglong) curr_step, 0);
-        not_reported_error= table->file->ha_update_tmp_row(table->record[1],
-                                                            table->record[0]);
-        rc= MY_TEST(not_reported_error);
-        DBUG_ASSERT(rc != HA_ERR_RECORD_IS_THE_SAME);
-        goto end;
+        if (table->field[0]->val_int() == prev_step)
+        {
+          store_record(table, record[1]);
+          table->field[0]->store((longlong) curr_step, 0);
+          not_reported_error= table->file->ha_update_tmp_row(table->record[1],
+                                                              table->record[0]);
+          rc= MY_TEST(not_reported_error);
+          DBUG_ASSERT(rc != HA_ERR_RECORD_IS_THE_SAME);
+        }
+        else
+          rc= delete_record();
       }
       else
-      {
-        if ((rc= not_reported_error= (find_res != 1)))
-          goto end;
-      }
+        rc= not_reported_error= (find_res != 1);
       break;
+
     default:
       DBUG_ASSERT(0);
     }
   }
-  rc= 0;
 
-end:
   if (unlikely(not_reported_error))
   {
     DBUG_ASSERT(rc);
@@ -715,11 +731,7 @@ bool select_unit_ext::send_eof()
         need_update_row= TRUE;
       }
       if (table->field[0]->val_int() == 0)
-      { /* need to delete this record */
-        table->status |= STATUS_DELETED;
-        error|= file->ha_delete_tmp_row(table->record[0]);
-        DBUG_ASSERT(!table->triggers);
-      }
+        error= delete_record();
       else if (need_update_row)
       { 
         error= table->file->ha_update_tmp_row(table->record[1],
@@ -731,10 +743,10 @@ bool select_unit_ext::send_eof()
   
 
   /* disable index and unfold */
-  if (can_disable_index && is_index)
+  if (can_disable_index && is_index_enabled)
   {
     table->file->ha_disable_indexes(HA_KEY_SWITCH_ALL); /* disable index to insert duplicate records */
-    is_index= FALSE;
+    is_index_enabled= FALSE;
     int dup_cnt; /* temporary variable to store `table->field[0]` */
     bool _is_duplicate= TRUE; /* constant parameter, for create_internal_tmp_table_from_heap */
     if (unlikely(file->ha_rnd_init_with_error(1)))
@@ -1555,32 +1567,35 @@ cont:
 
     /* extra field counter */
     uint hidden= 0;
+    Item_int *addon_fields[2]= {0};
     if (!is_recursive)
     {
       if(have_except_all_or_intersect_all)
       {
         // add duplicate_count
         ++hidden;
+        is_select_unit_ext= true;
         init_item_int(thd, addon_fields[0]);
-        types.push_front(union_result->addon_fields[0]= addon_fields[0]);
-        union_result->addon_fields[0]->name.str= "__CNT_1";
-        union_result->addon_fields[0]->name.length= 7;
+        types.push_front(addon_fields[0]= addon_fields[0]);
+        addon_fields[0]->name.str= "__CNT_1";
+        addon_fields[0]->name.length= 7;
       }
-      // add addon_fields
+      // add intersect_count
       if (have_intersect)
       {
         ++hidden;
         init_item_int(thd, addon_fields[1]);
-        types.push_front(union_result->addon_fields[1]= addon_fields[1]);
-        union_result->addon_fields[1]->name.str= "__CNT_2";
-        union_result->addon_fields[1]->name.length= 7;
-      }      
+        types.push_front(addon_fields[1]= addon_fields[1]);
+        addon_fields[1]->name.str= "__CNT_2";
+        addon_fields[1]->name.length= 7;
+      }
       bool error=
         union_result->create_result_table(thd, &types,
                                           MY_TEST(union_distinct),
                                           create_options, &empty_clex_str, false,
                                           instantiate_tmp_table, false,
                                           hidden);
+      union_result->addon_cnt= hidden;
       for (uint i= 0; i < hidden; i++)   
         types.pop();
       if (unlikely(error))
@@ -1660,8 +1675,7 @@ cont:
         We're in execution of a prepared statement or stored procedure:
         reset field items to point at fields from the created temporary table.
       */
-      table->reset_item_list(&item_list, (addon_fields[0] ? 1 : 0) +
-                                         (addon_fields[1] ? 1 : 0));
+      table->reset_item_list(&item_list, hidden);
     }
     if (fake_select_lex != NULL &&
         (thd->stmt_arena->is_stmt_prepare() ||
@@ -2021,7 +2035,7 @@ bool st_select_lex_unit::exec()
 	  sl->tvc->exec(sl);
 	else
 	  sl->join->exec();
-        if (sl == union_distinct && !(with_element && with_element->is_recursive) && !addon_fields[0])
+        if (sl == union_distinct && !(with_element && with_element->is_recursive) && !is_select_unit_ext)
 	{
           // This is UNION DISTINCT, so there should be a fake_select_lex
           DBUG_ASSERT(fake_select_lex != NULL);

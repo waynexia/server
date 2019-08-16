@@ -1,46 +1,252 @@
 create table t1 (a int, b int) engine=MyISAM;
 create table t2 (c int, d int) engine=MyISAM;
 create table t3 (e int, f int) engine=MyISAM;
-insert into t1 values (1,1),(2,2),(3,3),(2,2);
-insert into t2 values (2,2),(3,3),(5,5);
-insert into t3 values (4,4);
+create table t4 (g int, h int) engine=MyISAM;
+insert into t1 values (1,1),(2,2),(3,3),(2,2),(3,3);
+insert into t2 values (2,2),(3,3),(5,5),(2,2),(2,2),(3,3);
+insert into t3 values (4,4),(2,2),(2,2),(1,1),(3,3);
+insert into t4 values (2,2),(4,4),(1,1);
 create view v0(g, h) as select a,c from t1,t2;
+# test optimization
+select * from t1
+INTERSECT ALL
+select * from t2
+INTERSECT ALL 
+select * from t3;
+a	b
+2	2
+2	2
+3	3
+EXPLAIN EXTENDED select * from t1
+INTERSECT ALL
+select * from t2
+INTERSECT ALL 
+select * from t3;
+id	select_type	table	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	t1	ALL	NULL	NULL	NULL	NULL	5	100.00	
+2	INTERSECT	t2	ALL	NULL	NULL	NULL	NULL	6	100.00	
+3	INTERSECT	t3	ALL	NULL	NULL	NULL	NULL	5	100.00	
+NULL	INTERSECT RESULT	<intersect1,2,3>	ALL	NULL	NULL	NULL	NULL	NULL	NULL	
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` intersect all /* select#2 */ select `test`.`t2`.`c` AS `c`,`test`.`t2`.`d` AS `d` from `test`.`t2` intersect all /* select#3 */ select `test`.`t3`.`e` AS `e`,`test`.`t3`.`f` AS `f` from `test`.`t3`
+select * from t1
+INTERSECT ALL
+select * from t2
+INTERSECT ALL
+select * from t3
+INTERSECT
+select * from t1;
+a	b
+2	2
+3	3
+EXPLAIN EXTENDED select * from t1
+INTERSECT ALL
+select * from t2
+INTERSECT ALL
+select * from t3
+INTERSECT
+select * from t1;
+id	select_type	table	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	t1	ALL	NULL	NULL	NULL	NULL	5	100.00	
+2	INTERSECT	t2	ALL	NULL	NULL	NULL	NULL	6	100.00	
+3	INTERSECT	t3	ALL	NULL	NULL	NULL	NULL	5	100.00	
+4	INTERSECT	t1	ALL	NULL	NULL	NULL	NULL	5	100.00	
+NULL	INTERSECT RESULT	<intersect1,2,3,4>	ALL	NULL	NULL	NULL	NULL	NULL	NULL	
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` intersect /* select#2 */ select `test`.`t2`.`c` AS `c`,`test`.`t2`.`d` AS `d` from `test`.`t2` intersect /* select#3 */ select `test`.`t3`.`e` AS `e`,`test`.`t3`.`f` AS `f` from `test`.`t3` intersect /* select#4 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1`
+select * from t1
+INTERSECT ALL 
+select * from t2
+INTERSECT ALL
+select * from t3
+EXCEPT ALL
+select * from t4;
+a	b
+2	2
+3	3
+EXPLAIN EXTENDED select * from t1
+INTERSECT ALL 
+select * from t2
+INTERSECT ALL
+select * from t3
+EXCEPT ALL
+select * from t4;
+id	select_type	table	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	t1	ALL	NULL	NULL	NULL	NULL	5	100.00	
+2	INTERSECT	t2	ALL	NULL	NULL	NULL	NULL	6	100.00	
+3	INTERSECT	t3	ALL	NULL	NULL	NULL	NULL	5	100.00	
+4	EXCEPT	t4	ALL	NULL	NULL	NULL	NULL	3	100.00	
+NULL	UNIT RESULT	<unit1,2,3,4>	ALL	NULL	NULL	NULL	NULL	NULL	NULL	
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` intersect all /* select#2 */ select `test`.`t2`.`c` AS `c`,`test`.`t2`.`d` AS `d` from `test`.`t2` intersect all /* select#3 */ select `test`.`t3`.`e` AS `e`,`test`.`t3`.`f` AS `f` from `test`.`t3` except all /* select#4 */ select `test`.`t4`.`g` AS `g`,`test`.`t4`.`h` AS `h` from `test`.`t4`
+select * from t1
+INTERSECT
+select * from t2
+EXCEPT ALL
+select * from t4;
+a	b
+3	3
+EXPLAIN EXTENDED select * from t1
+INTERSECT
+select * from t2
+EXCEPT ALL
+select * from t4;
+id	select_type	table	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	t1	ALL	NULL	NULL	NULL	NULL	5	100.00	
+2	INTERSECT	t2	ALL	NULL	NULL	NULL	NULL	6	100.00	
+3	EXCEPT	t4	ALL	NULL	NULL	NULL	NULL	3	100.00	
+NULL	UNIT RESULT	<unit1,2,3>	ALL	NULL	NULL	NULL	NULL	NULL	NULL	
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` intersect /* select#2 */ select `test`.`t2`.`c` AS `c`,`test`.`t2`.`d` AS `d` from `test`.`t2` except /* select#3 */ select `test`.`t4`.`g` AS `g`,`test`.`t4`.`h` AS `h` from `test`.`t4`
+insert into t4 values (1,1),(9,9);
 select * from t1
 UNION ALL
 select * from t2
-INTERSECT ALL 
-(values (1,1), (2,2), (2,2), (5,5), (2,2) order by 1)
-INTERSECT ALL
-select * from (select * from t1 union all select * from t1) sq
-EXCEPT ALL
+UNION ALL
 select * from t3
+EXCEPT
+select * from t4;
+a	b
+3	3
+5	5
+EXPLAIN EXTENDED select * from t1
 UNION ALL
 select * from t2
-UNION
-select * from t3
-EXCEPT 
-select a,c from t1,t2
 UNION ALL
-select * from v0 where g < 4
+select * from t3
+EXCEPT
+select * from t4;
+id	select_type	table	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	t1	ALL	NULL	NULL	NULL	NULL	5	100.00	
+2	UNION	t2	ALL	NULL	NULL	NULL	NULL	6	100.00	
+3	UNION	t3	ALL	NULL	NULL	NULL	NULL	5	100.00	
+4	EXCEPT	t4	ALL	NULL	NULL	NULL	NULL	5	100.00	
+NULL	UNIT RESULT	<unit1,2,3,4>	ALL	NULL	NULL	NULL	NULL	NULL	NULL	
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` union all /* select#2 */ select `test`.`t2`.`c` AS `c`,`test`.`t2`.`d` AS `d` from `test`.`t2` union all /* select#3 */ select `test`.`t3`.`e` AS `e`,`test`.`t3`.`f` AS `f` from `test`.`t3` except /* select#4 */ select `test`.`t4`.`g` AS `g`,`test`.`t4`.`h` AS `h` from `test`.`t4`
+delete from t4;
+insert into t4 values (3,3),(3,3);
+select * from t1
+INTERSECT ALL
+select * from t2
+UNION ALL
+select * from t3
+EXCEPT ALL
+select * from t1
+UNION
+select * from t4
+EXCEPT
+select * from t3
 UNION ALL 
-select * from t3;
+select * from t1;
 a	b
 1	1
-1	2
-1	3
-1	5
 2	2
 2	2
-2	3
-2	3
-2	5
-2	5
-3	2
 3	3
-3	5
+3	3
+EXPLAIN EXTENDED select * from t1
+INTERSECT ALL
+select * from t2
+UNION ALL
+select * from t3
+EXCEPT ALL
+select * from t1
+UNION
+select * from t4
+EXCEPT
+select * from t3
+UNION ALL 
+select * from t1;
+id	select_type	table	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	t1	ALL	NULL	NULL	NULL	NULL	5	100.00	
+2	INTERSECT	t2	ALL	NULL	NULL	NULL	NULL	6	100.00	
+3	UNION	t3	ALL	NULL	NULL	NULL	NULL	5	100.00	
+4	EXCEPT	t1	ALL	NULL	NULL	NULL	NULL	5	100.00	
+5	UNION	t4	ALL	NULL	NULL	NULL	NULL	2	100.00	
+6	EXCEPT	t3	ALL	NULL	NULL	NULL	NULL	5	100.00	
+7	UNION	t1	ALL	NULL	NULL	NULL	NULL	5	100.00	
+NULL	UNIT RESULT	<unit1,2,3,4,5,6,7>	ALL	NULL	NULL	NULL	NULL	NULL	NULL	
+Warnings:
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` intersect all /* select#2 */ select `test`.`t2`.`c` AS `c`,`test`.`t2`.`d` AS `d` from `test`.`t2` union all /* select#3 */ select `test`.`t3`.`e` AS `e`,`test`.`t3`.`f` AS `f` from `test`.`t3` except all /* select#4 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` union /* select#5 */ select `test`.`t4`.`g` AS `g`,`test`.`t4`.`h` AS `h` from `test`.`t4` except /* select#6 */ select `test`.`t3`.`e` AS `e`,`test`.`t3`.`f` AS `f` from `test`.`t3` union all /* select#7 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1`
+drop table t4;
+# test set operations with table value constructor
+(values (1,1),(1,1),(1,1),(2,2),(2,2),(3,3),(9,9))
+INTERSECT ALL
+(values (1,1),(2,2),(2,2),(3,3),(3,3),(3,3),(8,8))
+EXCEPT ALL
+(values (7,7),(1,1));
+1	1
+2	2
+2	2
+3	3
+delete from t1;
+insert into t1 values(1,1),(1,1),(2,2),(4,4),(9,9);
+select * from t1
+UNION ALL
+(values (11,12),(3,3),(2,2),(3,3),(4,4),(8,8))
+INTERSECT
+(values (13,14),(7,7),(2,2),(3,3),(1,1))
+INTERSECT ALL
+(values (15,16),(2,2),(1,1))
+EXCEPT
+(values (17,18),(1,1));
+a	b
+2	2
 4	4
-4	4
+9	9
+# test set operations with derived table
+select * from (
+select * from t1
+UNION ALL
+select * from t2
+)dt1
+INTERSECT ALL
+select * from (
+select * from t2
+EXCEPT ALL
+select * from t3
+)dt2;
+a	b
+2	2
+3	3
 5	5
+select * from (
+select * from t1
+UNION ALL
+select * from t3
+)dt1
+EXCEPT ALL
+select * from (
+select * from t2
+INTERSECT ALL
+select * from t2
+)dt2;
+a	b
+1	1
+1	1
+4	4
+9	9
+1	1
+4	4
+SELECT * from(
+select * from (
+select * from t1
+UNION ALL
+select * from t2
+)dt1
+INTERSECT ALL
+select * from (
+select * from t2
+EXCEPT ALL
+select * from t3
+)dt2
+)dt3;
+a	b
+2	2
+3	3
+5	5
+# integration test
 select * from t1
 UNION ALL
 select * from t2
@@ -62,21 +268,33 @@ UNION ALL
 select * from t3;
 a	b
 1	1
+1	1
+1	2
+1	2
+1	2
+1	2
+1	2
 1	2
 1	3
+1	3
+1	3
+1	3
+1	5
 1	5
 2	2
 2	2
+2	2
+2	2
+2	2
 2	3
 2	3
 2	5
-2	5
-3	2
 3	3
-3	5
+3	3
 4	4
 4	4
 5	5
+9	9
 select * from (
 select * from t1
 UNION ALL
@@ -97,24 +315,36 @@ UNION ALL
 select * from v0 where g < 4
 UNION ALL 
 select * from t3
-) sq;
+) dt;
 a	b
 1	1
+1	1
+1	2
+1	2
+1	2
+1	2
+1	2
 1	2
 1	3
+1	3
+1	3
+1	3
+1	5
 1	5
 2	2
 2	2
+2	2
+2	2
+2	2
 2	3
 2	3
 2	5
-2	5
-3	2
 3	3
-3	5
+3	3
 4	4
 4	4
 5	5
+9	9
 EXPLAIN
 select * from t1
 UNION ALL
@@ -136,22 +366,22 @@ select * from v0 where g < 4
 UNION ALL 
 select * from t3;
 id	select_type	table	type	possible_keys	key	key_len	ref	rows	Extra
-1	PRIMARY	t1	ALL	NULL	NULL	NULL	NULL	4	
-8	UNION	<derived2>	ALL	NULL	NULL	NULL	NULL	3	
-2	DERIVED	t2	ALL	NULL	NULL	NULL	NULL	3	
+1	PRIMARY	t1	ALL	NULL	NULL	NULL	NULL	5	
+8	UNION	<derived2>	ALL	NULL	NULL	NULL	NULL	5	
+2	DERIVED	t2	ALL	NULL	NULL	NULL	NULL	6	
 3	INTERSECT	NULL	NULL	NULL	NULL	NULL	NULL	NULL	No tables used
-4	INTERSECT	<derived5>	ALL	NULL	NULL	NULL	NULL	8	
-5	DERIVED	t1	ALL	NULL	NULL	NULL	NULL	4	
-6	UNION	t1	ALL	NULL	NULL	NULL	NULL	4	
+4	INTERSECT	<derived5>	ALL	NULL	NULL	NULL	NULL	10	
+5	DERIVED	t1	ALL	NULL	NULL	NULL	NULL	5	
+6	UNION	t1	ALL	NULL	NULL	NULL	NULL	5	
 NULL	INTERSECT RESULT	<intersect2,3,4>	ALL	NULL	NULL	NULL	NULL	NULL	
-7	EXCEPT	t3	system	NULL	NULL	NULL	NULL	1	
-9	UNION	t2	ALL	NULL	NULL	NULL	NULL	3	
-10	UNION	t3	system	NULL	NULL	NULL	NULL	1	
-11	EXCEPT	t2	ALL	NULL	NULL	NULL	NULL	3	
-11	EXCEPT	t1	ALL	NULL	NULL	NULL	NULL	4	Using join buffer (flat, BNL join)
-12	UNION	t2	ALL	NULL	NULL	NULL	NULL	3	
-12	UNION	t1	ALL	NULL	NULL	NULL	NULL	4	Using where; Using join buffer (flat, BNL join)
-13	UNION	t3	system	NULL	NULL	NULL	NULL	1	
+7	EXCEPT	t3	ALL	NULL	NULL	NULL	NULL	5	
+9	UNION	t2	ALL	NULL	NULL	NULL	NULL	6	
+10	UNION	t3	ALL	NULL	NULL	NULL	NULL	5	
+11	EXCEPT	t1	ALL	NULL	NULL	NULL	NULL	5	
+11	EXCEPT	t2	ALL	NULL	NULL	NULL	NULL	6	Using join buffer (flat, BNL join)
+12	UNION	t1	ALL	NULL	NULL	NULL	NULL	5	Using where
+12	UNION	t2	ALL	NULL	NULL	NULL	NULL	6	Using join buffer (flat, BNL join)
+13	UNION	t3	ALL	NULL	NULL	NULL	NULL	5	
 NULL	UNIT RESULT	<unit1,8,7,9,10,11,12,13>	ALL	NULL	NULL	NULL	NULL	NULL	
 EXPLAIN format=json
 select * from t1
@@ -186,7 +416,7 @@ EXPLAIN
             "table": {
               "table_name": "t1",
               "access_type": "ALL",
-              "rows": 4,
+              "rows": 5,
               "filtered": 100
             }
           }
@@ -198,7 +428,7 @@ EXPLAIN
             "table": {
               "table_name": "<derived2>",
               "access_type": "ALL",
-              "rows": 3,
+              "rows": 5,
               "filtered": 100,
               "materialized": {
                 "query_block": {
@@ -212,7 +442,7 @@ EXPLAIN
                           "table": {
                             "table_name": "t2",
                             "access_type": "ALL",
-                            "rows": 3,
+                            "rows": 6,
                             "filtered": 100
                           }
                         }
@@ -233,7 +463,7 @@ EXPLAIN
                           "table": {
                             "table_name": "<derived5>",
                             "access_type": "ALL",
-                            "rows": 8,
+                            "rows": 10,
                             "filtered": 100,
                             "materialized": {
                               "query_block": {
@@ -247,7 +477,7 @@ EXPLAIN
                                         "table": {
                                           "table_name": "t1",
                                           "access_type": "ALL",
-                                          "rows": 4,
+                                          "rows": 5,
                                           "filtered": 100
                                         }
                                       }
@@ -259,7 +489,7 @@ EXPLAIN
                                         "table": {
                                           "table_name": "t1",
                                           "access_type": "ALL",
-                                          "rows": 4,
+                                          "rows": 5,
                                           "filtered": 100
                                         }
                                       }
@@ -284,8 +514,8 @@ EXPLAIN
             "operation": "EXCEPT",
             "table": {
               "table_name": "t3",
-              "access_type": "system",
-              "rows": 1,
+              "access_type": "ALL",
+              "rows": 5,
               "filtered": 100
             }
           }
@@ -297,7 +527,7 @@ EXPLAIN
             "table": {
               "table_name": "t2",
               "access_type": "ALL",
-              "rows": 3,
+              "rows": 6,
               "filtered": 100
             }
           }
@@ -308,8 +538,8 @@ EXPLAIN
             "operation": "UNION",
             "table": {
               "table_name": "t3",
-              "access_type": "system",
-              "rows": 1,
+              "access_type": "ALL",
+              "rows": 5,
               "filtered": 100
             }
           }
@@ -319,16 +549,16 @@ EXPLAIN
             "select_id": 11,
             "operation": "EXCEPT",
             "table": {
-              "table_name": "t2",
+              "table_name": "t1",
               "access_type": "ALL",
-              "rows": 3,
+              "rows": 5,
               "filtered": 100
             },
             "block-nl-join": {
               "table": {
-                "table_name": "t1",
+                "table_name": "t2",
                 "access_type": "ALL",
-                "rows": 4,
+                "rows": 6,
                 "filtered": 100
               },
               "buffer_type": "flat",
@@ -342,18 +572,18 @@ EXPLAIN
             "select_id": 12,
             "operation": "UNION",
             "table": {
-              "table_name": "t2",
+              "table_name": "t1",
               "access_type": "ALL",
-              "rows": 3,
-              "filtered": 100
+              "rows": 5,
+              "filtered": 100,
+              "attached_condition": "t1.a < 4"
             },
             "block-nl-join": {
               "table": {
-                "table_name": "t1",
+                "table_name": "t2",
                 "access_type": "ALL",
-                "rows": 4,
-                "filtered": 100,
-                "attached_condition": "t1.a < 4"
+                "rows": 6,
+                "filtered": 100
               },
               "buffer_type": "flat",
               "buffer_size": "65",
@@ -367,8 +597,8 @@ EXPLAIN
             "operation": "UNION",
             "table": {
               "table_name": "t3",
-              "access_type": "system",
-              "rows": 1,
+              "access_type": "ALL",
+              "rows": 5,
               "filtered": 100
             }
           }
@@ -398,25 +628,25 @@ select * from v0 where g < 4
 UNION ALL 
 select * from t3;
 id	select_type	table	type	possible_keys	key	key_len	ref	rows	filtered	Extra
-1	PRIMARY	t1	ALL	NULL	NULL	NULL	NULL	4	100.00	
-8	UNION	<derived2>	ALL	NULL	NULL	NULL	NULL	3	100.00	
-2	DERIVED	t2	ALL	NULL	NULL	NULL	NULL	3	100.00	
+1	PRIMARY	t1	ALL	NULL	NULL	NULL	NULL	5	100.00	
+8	UNION	<derived2>	ALL	NULL	NULL	NULL	NULL	5	100.00	
+2	DERIVED	t2	ALL	NULL	NULL	NULL	NULL	6	100.00	
 3	INTERSECT	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	No tables used
-4	INTERSECT	<derived5>	ALL	NULL	NULL	NULL	NULL	8	100.00	
-5	DERIVED	t1	ALL	NULL	NULL	NULL	NULL	4	100.00	
-6	UNION	t1	ALL	NULL	NULL	NULL	NULL	4	100.00	
+4	INTERSECT	<derived5>	ALL	NULL	NULL	NULL	NULL	10	100.00	
+5	DERIVED	t1	ALL	NULL	NULL	NULL	NULL	5	100.00	
+6	UNION	t1	ALL	NULL	NULL	NULL	NULL	5	100.00	
 NULL	INTERSECT RESULT	<intersect2,3,4>	ALL	NULL	NULL	NULL	NULL	NULL	NULL	
-7	EXCEPT	t3	system	NULL	NULL	NULL	NULL	1	100.00	
-9	UNION	t2	ALL	NULL	NULL	NULL	NULL	3	100.00	
-10	UNION	t3	system	NULL	NULL	NULL	NULL	1	100.00	
-11	EXCEPT	t2	ALL	NULL	NULL	NULL	NULL	3	100.00	
-11	EXCEPT	t1	ALL	NULL	NULL	NULL	NULL	4	100.00	Using join buffer (flat, BNL join)
-12	UNION	t2	ALL	NULL	NULL	NULL	NULL	3	100.00	
-12	UNION	t1	ALL	NULL	NULL	NULL	NULL	4	100.00	Using where; Using join buffer (flat, BNL join)
-13	UNION	t3	system	NULL	NULL	NULL	NULL	1	100.00	
+7	EXCEPT	t3	ALL	NULL	NULL	NULL	NULL	5	100.00	
+9	UNION	t2	ALL	NULL	NULL	NULL	NULL	6	100.00	
+10	UNION	t3	ALL	NULL	NULL	NULL	NULL	5	100.00	
+11	EXCEPT	t1	ALL	NULL	NULL	NULL	NULL	5	100.00	
+11	EXCEPT	t2	ALL	NULL	NULL	NULL	NULL	6	100.00	Using join buffer (flat, BNL join)
+12	UNION	t1	ALL	NULL	NULL	NULL	NULL	5	100.00	Using where
+12	UNION	t2	ALL	NULL	NULL	NULL	NULL	6	100.00	Using join buffer (flat, BNL join)
+13	UNION	t3	ALL	NULL	NULL	NULL	NULL	5	100.00	
 NULL	UNIT RESULT	<unit1,8,7,9,10,11,12,13>	ALL	NULL	NULL	NULL	NULL	NULL	NULL	
 Warnings:
-Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` union /* select#8 */ select `__8`.`c` AS `c`,`__8`.`d` AS `d` from (/* select#2 */ select `test`.`t2`.`c` AS `c`,`test`.`t2`.`d` AS `d` from `test`.`t2` intersect all (values (1,1),(2,2),(2,2),(5,5),(2,2)) intersect all /* select#4 */ select `sq`.`a` AS `a`,`sq`.`b` AS `b` from (/* select#5 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` union all /* select#6 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1`) `sq`) `__8` except all /* select#7 */ select 4 AS `e`,4 AS `f` from dual union /* select#9 */ select `test`.`t2`.`c` AS `c`,`test`.`t2`.`d` AS `d` from `test`.`t2` union /* select#10 */ select 4 AS `e`,4 AS `f` from dual except /* select#11 */ select `test`.`t1`.`a` AS `a`,`test`.`t2`.`c` AS `c` from `test`.`t1` join `test`.`t2` union all /* select#12 */ select `test`.`t1`.`a` AS `g`,`test`.`t2`.`c` AS `h` from `test`.`t1` join `test`.`t2` where `test`.`t1`.`a` < 4 union all /* select#13 */ select 4 AS `e`,4 AS `f` from dual
+Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` union all /* select#8 */ select `__8`.`c` AS `c`,`__8`.`d` AS `d` from (/* select#2 */ select `test`.`t2`.`c` AS `c`,`test`.`t2`.`d` AS `d` from `test`.`t2` intersect all (values (1,1),(2,2),(2,2),(5,5),(2,2)) intersect all /* select#4 */ select `sq`.`a` AS `a`,`sq`.`b` AS `b` from (/* select#5 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` union all /* select#6 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1`) `sq`) `__8` except all /* select#7 */ select `test`.`t3`.`e` AS `e`,`test`.`t3`.`f` AS `f` from `test`.`t3` union all /* select#9 */ select `test`.`t2`.`c` AS `c`,`test`.`t2`.`d` AS `d` from `test`.`t2` union /* select#10 */ select `test`.`t3`.`e` AS `e`,`test`.`t3`.`f` AS `f` from `test`.`t3` except /* select#11 */ select `test`.`t1`.`a` AS `a`,`test`.`t2`.`c` AS `c` from `test`.`t1` join `test`.`t2` union all /* select#12 */ select `test`.`t1`.`a` AS `g`,`test`.`t2`.`c` AS `h` from `test`.`t1` join `test`.`t2` where `test`.`t1`.`a` < 4 union all /* select#13 */ select `test`.`t3`.`e` AS `e`,`test`.`t3`.`f` AS `f` from `test`.`t3`
 PREPARE stmt from"
     select * from t1
     UNION ALL
@@ -441,39 +671,63 @@ PREPARE stmt from"
 EXECUTE stmt;
 a	b
 1	1
+1	1
+1	2
+1	2
+1	2
+1	2
+1	2
 1	2
 1	3
+1	3
+1	3
+1	3
+1	5
 1	5
 2	2
 2	2
+2	2
+2	2
+2	2
 2	3
 2	3
 2	5
-2	5
-3	2
 3	3
-3	5
+3	3
 4	4
 4	4
 5	5
+9	9
 EXECUTE stmt;
 a	b
 1	1
+1	1
+1	2
+1	2
+1	2
+1	2
+1	2
 1	2
 1	3
+1	3
+1	3
+1	3
+1	5
 1	5
 2	2
 2	2
+2	2
+2	2
+2	2
 2	3
 2	3
 2	5
-2	5
-3	2
 3	3
-3	5
+3	3
 4	4
 4	4
 5	5
+9	9
 deallocate prepare stmt;
 create view v1(i1, i2) as
 select * from t1
@@ -498,97 +752,41 @@ select * from t3;
 show create view v1;
 View	Create View	character_set_client	collation_connection
 v1	CREATE ALGORITHM=UNDEFINED DEFINER=`root`@`localhost` SQL SECURITY DEFINER VIEW `v1` AS select `test`.`t1`.`a` AS `i1`,`test`.`t1`.`b` AS `i2` from `test`.`t1` union all select `__9`.`c` AS `c`,`__9`.`d` AS `d` from (select `test`.`t2`.`c` AS `c`,`test`.`t2`.`d` AS `d` from `test`.`t2` intersect all (values (1,1),(2,2),(2,2),(5,5),(2,2)) intersect all select `sq`.`a` AS `a`,`sq`.`b` AS `b` from (select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` union all select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1`) `sq`) `__9` except all select `test`.`t3`.`e` AS `e`,`test`.`t3`.`f` AS `f` from `test`.`t3` union all select `test`.`t2`.`c` AS `c`,`test`.`t2`.`d` AS `d` from `test`.`t2` union select `test`.`t3`.`e` AS `e`,`test`.`t3`.`f` AS `f` from `test`.`t3` except select `test`.`t1`.`a` AS `a`,`test`.`t2`.`c` AS `c` from (`test`.`t1` join `test`.`t2`) union all select `v0`.`g` AS `g`,`v0`.`h` AS `h` from `test`.`v0` where `v0`.`g` < 4 union all select `test`.`t3`.`e` AS `e`,`test`.`t3`.`f` AS `f` from `test`.`t3`	latin1	latin1_swedish_ci
-select * from v1 limit 5;
-i1	i2
-1	1
-1	3
-1	2
-5	5
-4	4
-select * from v1 order by i1 limit 5;
+select * from v1 limit 14;
 i1	i2
 1	1
 1	2
-1	3
-1	5
-2	2
-select * from t1
-UNION ALL
-select * from t2
-INTERSECT ALL 
-(values (1,1), (2,2), (2,2), (5,5), (2,2) )
-INTERSECT ALL
-select * from (select * from t1 union all select * from t1) sq
-EXCEPT ALL
-select * from t3
-UNION ALL
-select * from t2
-UNION
-select * from t3
-EXCEPT 
-select a,c from t1,t2
-UNION ALL
-select * from v0 where g < 4
-UNION ALL 
-select * from t3;
-a	b
-1	1
-1	3
-1	2
-5	5
-4	4
-1	5
-2	2
-2	3
-2	5
-3	2
 3	3
-3	5
-2	2
-2	3
-2	5
+9	9
+5	5
 4	4
-EXPLAIN EXTENDED select * from t1
-UNION ALL
-select * from t2
-INTERSECT ALL 
-(values (1,1), (2,2), (2,2), (5,5), (2,2) )
-INTERSECT ALL
-select * from (select * from t1 union all select * from t1) sq
-EXCEPT ALL
-select * from t3
-UNION ALL
-select * from t2
-UNION
-select * from t3
-EXCEPT 
-select a,c from t1,t2
-UNION ALL
-select * from v0 where g < 4
-UNION ALL 
-select * from t3;
-id	select_type	table	type	possible_keys	key	key_len	ref	rows	filtered	Extra
-1	PRIMARY	t1	ALL	NULL	NULL	NULL	NULL	4	100.00	
-8	UNION	<derived2>	ALL	NULL	NULL	NULL	NULL	3	100.00	
-2	DERIVED	t2	ALL	NULL	NULL	NULL	NULL	3	100.00	
-3	INTERSECT	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	No tables used
-4	INTERSECT	<derived5>	ALL	NULL	NULL	NULL	NULL	8	100.00	
-5	DERIVED	t1	ALL	NULL	NULL	NULL	NULL	4	100.00	
-6	UNION	t1	ALL	NULL	NULL	NULL	NULL	4	100.00	
-NULL	INTERSECT RESULT	<intersect2,3,4>	ALL	NULL	NULL	NULL	NULL	NULL	NULL	
-7	EXCEPT	t3	system	NULL	NULL	NULL	NULL	1	100.00	
-9	UNION	t2	ALL	NULL	NULL	NULL	NULL	3	100.00	
-10	UNION	t3	system	NULL	NULL	NULL	NULL	1	100.00	
-11	EXCEPT	t2	ALL	NULL	NULL	NULL	NULL	3	100.00	
-11	EXCEPT	t1	ALL	NULL	NULL	NULL	NULL	4	100.00	Using join buffer (flat, BNL join)
-12	UNION	t2	ALL	NULL	NULL	NULL	NULL	3	100.00	
-12	UNION	t1	ALL	NULL	NULL	NULL	NULL	4	100.00	Using where; Using join buffer (flat, BNL join)
-13	UNION	t3	system	NULL	NULL	NULL	NULL	1	100.00	
-NULL	UNIT RESULT	<unit1,8,7,9,10,11,12,13>	ALL	NULL	NULL	NULL	NULL	NULL	NULL	
-Warnings:
-Note	1003	/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` union /* select#8 */ select `__8`.`c` AS `c`,`__8`.`d` AS `d` from (/* select#2 */ select `test`.`t2`.`c` AS `c`,`test`.`t2`.`d` AS `d` from `test`.`t2` intersect all (values (1,1),(2,2),(2,2),(5,5),(2,2)) intersect all /* select#4 */ select `sq`.`a` AS `a`,`sq`.`b` AS `b` from (/* select#5 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` union all /* select#6 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1`) `sq`) `__8` except all /* select#7 */ select 4 AS `e`,4 AS `f` from dual union /* select#9 */ select `test`.`t2`.`c` AS `c`,`test`.`t2`.`d` AS `d` from `test`.`t2` union /* select#10 */ select 4 AS `e`,4 AS `f` from dual except /* select#11 */ select `test`.`t1`.`a` AS `a`,`test`.`t2`.`c` AS `c` from `test`.`t1` join `test`.`t2` union all /* select#12 */ select `test`.`t1`.`a` AS `g`,`test`.`t2`.`c` AS `h` from `test`.`t1` join `test`.`t2` where `test`.`t1`.`a` < 4 union all /* select#13 */ select 4 AS `e`,4 AS `f` from dual
+1	2
+2	2
+1	3
+1	3
+2	3
+1	5
+1	5
+2	5
+select * from v1 order by i1 limit 14;
+i1	i2
+1	1
+1	1
+1	2
+1	2
+1	2
+1	2
+1	2
+1	2
+1	3
+1	3
+1	3
+1	3
+1	5
+1	5
 drop table t1,t2,t3;
 drop view v0,v1;
+# compare result
 create table t1 (a int, b int);
 create table t2 (c int, d int);
 create table t3 (e int, f int);
@@ -614,11 +812,11 @@ select * from t1 intersect DISTINCT select * from t2 except ALL select * from t3
 a	b
 4	4
 2	2
-delete from t1 where true;
-delete from t2 where true;
-delete from t3 where true;
-delete from t4 where true;
-insert into t1 values (1,1),(1,1),(1,1),(2,2),(2,2),(4,4);
+delete from t1;
+delete from t2;
+delete from t3;
+delete from t4;
+insert into t1 values (1,1),(1,1),(1,1),(2,2),(2,2),(4,4),(5,5);
 insert into t2 values (1,1),(1,1),(1,1),(2,2),(2,2),(3,3);
 insert into t3 values (1,1),(2,2),(2,2);
 select * from t1 intersect all select * from t2 intersect all select * from t3;
@@ -634,9 +832,9 @@ select * from t1 intersect all select * from t1 intersect all select * from t2 i
 a	b
 1	1
 2	2
-delete from t1 where true;
-delete from t2 where true;
-delete from t3 where true;
+delete from t1;
+delete from t2;
+delete from t3;
 insert into t1 values (1,1),(1,1),(2,2);
 insert into t2 values (1,1),(1,1),(2,2),(3,3);
 insert into t3 values (1,1),(5,5);
@@ -688,10 +886,10 @@ a	b
 5	5
 1	1
 4	4
-delete from t1 where true;
-delete from t2 where true;
-delete from t3 where true;
-delete from t4 where true;
+delete from t1;
+delete from t2;
+delete from t3;
+delete from t4;
 insert into t1 values (1,1),(2,2);
 insert into t2 values (1,1),(2,2);
 insert into t3 values (1,1),(3,3);

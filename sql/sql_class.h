@@ -5690,15 +5690,14 @@ public:
   enum sub_select_type step;
   bool is_distinct;
 public:
-  Item_int *addon_fields[2];
+  int addon_cnt;
   TMP_TABLE_PARAM tmp_table_param;
   int write_err; /* Error code from the last send_data->ha_write_row call. */
   TABLE *table;
 
   select_unit(THD *thd_arg):
-    select_result_interceptor(thd_arg), table(0), is_send_data_set(FALSE)
+    select_result_interceptor(thd_arg), addon_cnt(0), table(0), is_send_data_set(FALSE)
   {
-    addon_fields[0]= addon_fields[1]= 0;
     init();
     tmp_table_param.init();
   }
@@ -5715,6 +5714,7 @@ public:
   { return false; }
   int send_data(List<Item> &items);
   int write_record();
+  int delete_record();
   bool is_send_data_set;
   bool send_eof();
   virtual bool flush();
@@ -5745,7 +5745,7 @@ class select_unit_ext :public select_unit
 {
 public:
   select_unit_ext(THD *thd_arg, st_select_lex* _union_distinct):
-    select_unit(thd_arg), offset(0), increment(0), is_index(TRUE)
+    select_unit(thd_arg), offset(0), increment(0), is_index_enabled(TRUE)
   {
     union_distinct = _union_distinct;
   };
@@ -5755,7 +5755,7 @@ public:
   
   int offset;
   int increment;
-  bool is_index;
+  bool is_index_enabled;
   st_select_lex* union_distinct;
 };
 
