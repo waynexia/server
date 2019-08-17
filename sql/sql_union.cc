@@ -224,14 +224,14 @@ bool select_unit::send_eof()
   TODO: as optimization for simple case this could be moved to
   'fake_select' WHERE condition
   */
-  handler *file= table->file;
+  //handler *file= table->file;
   int error;
 
-  if (file->ha_rnd_init_with_error(1))
+  if (table->file->ha_rnd_init_with_error(1))
     return 1;
   do
   {
-    error= file->ha_rnd_next(table->record[0]);
+    error= table->file->ha_rnd_next(table->record[0]);
     if (error)
     {
       if (error == HA_ERR_END_OF_FILE)
@@ -249,7 +249,7 @@ bool select_unit::send_eof()
     if (table->field[0]->val_int() != curr_step)
       error= delete_record();
   } while (!error);
-  file->ha_rnd_end();
+  table->file->ha_rnd_end();
 
   if (unlikely(error))
     table->file->print_error(error, MYF(0));
@@ -409,7 +409,7 @@ select_union_recursive::create_result_table(THD *thd_arg,
     -1  found a duplicate key
     0   no error
     1   if an error is reported
-
+    2   conversion happened
 */
 
 int select_unit::write_record()
@@ -426,13 +426,19 @@ int select_unit::write_record()
     }
     bool is_duplicate= FALSE;
     /* create_internal_tmp_table_from_heap will generate error if needed */
-    if (table->file->is_fatal_error(write_err, HA_CHECK_DUP) &&
-        create_internal_tmp_table_from_heap(thd, table,
-                                            tmp_table_param.start_recinfo,
-                                            &tmp_table_param.recinfo,
-                                            write_err, 1, &is_duplicate))
+    if (table->file->is_fatal_error(write_err, HA_CHECK_DUP))
     {
-      return 1;
+      if (!create_internal_tmp_table_from_heap(thd, table,
+                                              tmp_table_param.start_recinfo,
+                                              &tmp_table_param.recinfo,
+                                              write_err, 1, &is_duplicate))
+      {
+        return -2;
+      }
+      else
+      {
+        return 1;
+      }
     }
     if (is_duplicate)
     {
@@ -444,7 +450,12 @@ int select_unit::write_record()
 
 
 /*
-
+  @brief
+    Update counter for a record
+    
+  @retval
+    0   no error
+    -1  error occured
 */
 
 int select_unit::update_counter(int offset, longlong value)
@@ -456,39 +467,32 @@ int select_unit::update_counter(int offset, longlong value)
   return error;
 }
 
-/*
-
-*/
-
-void select_unit_ext::init()
-{
-  duplicate_cnt= 1;
-  additional_cnt= 0;
-}
 
 /*
+  @brief
+    Unfold a record
 
+  @retval
+    0   no error
+    -1  conversion happened
 */
 
 int select_unit_ext::unfold_record(int cnt)
 {
   int error= 0;
-  bool is_duplicate= TRUE;
+  bool is_convertion_happened= false;
+  // bool is_duplicate= TRUE;
   while (--cnt)
   {
-    if(write_record() == 1)
+    error= write_record();
+    if(error == -2)
     {
-      error= 1;
-      // break;
+      is_convertion_happened= true;
+      error= -1;
     }
   }
-  if (error)
-  {
-    create_internal_tmp_table_from_heap(thd, table,
-                                        tmp_table_param.start_recinfo,
-                                        &tmp_table_param.recinfo,
-                                        write_err, 1, &is_duplicate);
-  }
+  if (is_convertion_happened)
+    return -1;
   return error;
 }
 
@@ -526,7 +530,7 @@ void select_unit::cleanup()
 
 /*
   @brief
-    Set up value needed by send_data()
+    Set up value needed by send_data() and send_eof()
 
   @detail
     - For EXCEPT we will decrease the counter by one
@@ -540,15 +544,30 @@ void select_unit_ext::change_select()
 {
   select_unit::change_select();
   
-  if(step == EXCEPT_TYPE)
-    increment= -1;
-  else
+  switch(step){
+  case UNION_TYPE:
     increment= 1;
-
-  if(step == INTERSECT_TYPE)
-    offset= 1;
-  else
     offset= 0;
+    type= UNION_DISTINCT;
+    break;
+  case EXCEPT_TYPE:
+    increment= -1;
+    offset= 0;
+    type= EXCEPT_DISTINCT;
+    break;
+  case INTERSECT_TYPE:
+    increment= 1;
+    offset= 1;
+    type= INTERSECT_DISTINCT;
+    break;
+  default: break;
+  }
+  if(!is_distinct)
+    /* change type from DISTINCT to ALL */
+    type= (set_op_type)(type + 1);
+
+  if(!thd->lex->current_select->next_select())
+    is_last_op= TRUE;
 }
 
 
@@ -673,9 +692,9 @@ int select_unit_ext::send_data(List<Item> &values)
     case INTERSECT_TYPE:
       if (!(find_res= table->file->find_unique_row(table->record[0], 0))) 
       {
-        if (table->field[0]->val_int() == prev_step)
+        if (table->field[1]->val_int() == prev_step)
         {
-          not_reported_error= update_counter(0, curr_step);
+          not_reported_error= update_counter(1, curr_step);
           rc= MY_TEST(not_reported_error);
           DBUG_ASSERT(rc != HA_ERR_RECORD_IS_THE_SAME);
         }
@@ -705,42 +724,41 @@ int select_unit_ext::send_data(List<Item> &values)
     Do post-operation after a operator
 
   @detail
-    - If next is distinct set duplicate counter to 1
-    - If next is intersect set intersect counter to 0
-    - If this one is intersect set duplicate counter to the minimal between
-      duplicate counter and intersect counter
-    - If a record's duplicate counter is lesser then 1 we delete it.
-    - In the end of the whole sequence we unfold duplicate records
+    We need to scan in these cases:
+      - If this operation is DISTINCT and next is ALL,
+        duplicate counter needs to be set to 1.
+      - If this operation is INTERSECT ALL and counter needs to be updated.
+      - If next operation is INTERSECT ALL,
+        set up the second extra field (called "intersect_counter") to 0.
+        this extra field counts records in the second operand.
+
+    If this operation is equal to "union_distinct" or is the last operation,
+    we'll disable index. Then if this operation is ALL we'll unfold records.
 */
 
 bool select_unit_ext::send_eof()
 {
-  handler *file= table->file;
   int error= 0;
-  SELECT_LEX *next_sl= thd->lex->current_select->next_select();
+  SELECT_LEX *curr_sl= thd->lex->current_select;
+  SELECT_LEX *next_sl= curr_sl->next_select();
   bool is_next_distinct= next_sl && next_sl->distinct;
   bool is_next_intersect_all= 
-    next_sl && next_sl->get_linkage() == INTERSECT_TYPE && !is_distinct;
-  bool is_last_intersect_distinct= step == INTERSECT_TYPE && is_distinct &&
-    next_sl && next_sl->get_linkage() != INTERSECT_TYPE;
-  /* index can be disabled at the end of sequence or after the node which
-     followed sequence only contains UNION ALL */
-  bool can_disable_index= thd->lex->current_select == union_distinct || ! next_sl;
-  /* whether need to call ha_update_tmp_row() */
-  bool need_update_row;
-  /* if this and next are UNION ALL we need not to scan file */
-  bool need_scan_file= is_next_distinct || is_last_intersect_distinct ||
-    is_next_intersect_all || (step == INTERSECT_TYPE && !is_distinct) || 
-    step != UNION_TYPE ;
+                        next_sl && 
+                        next_sl->get_linkage() == INTERSECT_TYPE && 
+                        !next_sl->distinct;
+  bool can_disable_index= curr_sl == union_distinct || is_last_op;
+  bool need_scan_file= (is_distinct && !is_next_distinct) || 
+    type == INTERSECT_ALL || is_next_intersect_all;
 
   if (need_scan_file)
   {
-    if (unlikely(file->ha_rnd_init_with_error(1)))
+    bool need_update_row;
+    if (unlikely(table->file->ha_rnd_init_with_error(1)))
       return 1;
     do
     {
       need_update_row= FALSE;
-      if (unlikely(error= file->ha_rnd_next(table->record[0])))
+      if (unlikely(error= table->file->ha_rnd_next(table->record[0])))
       {
         if (error == HA_ERR_END_OF_FILE)
         {
@@ -750,41 +768,37 @@ bool select_unit_ext::send_eof()
         break;
       }    
       store_record(table, record[1]);
-      if (!is_distinct && is_next_distinct)
-      { /* set duplicate counter to 1 if next operation is distinct */
+
+      if (is_distinct && !is_next_distinct)
+      { 
+        /* set duplicate counter to 1 if next operation is ALL */
         table->field[0]->store(1, 0);
         need_update_row= TRUE;
       }
-      if (step == INTERSECT_TYPE && !is_distinct && 
+
+      if (type == INTERSECT_ALL && 
         table->field[0]->val_int() > table->field[1]->val_int())
-      { /* take minimal between `counter` and `intersect_counter` for INTERSECT */
+      { 
+        /* take minimal between `counter` and `intersect_counter` for INTERSECT */
         table->field[0]->store(table->field[1]->val_int(), 0);
         need_update_row= TRUE;
       }
-      else if (is_last_intersect_distinct)
-      { /* omit record in the end of INTERSECT DISTINCT sequence */
-        if(table->field[0]->val_int() == curr_step)
-          table->field[0]->store((longlong)1, 0);
-        else
-          table->field[0]->store((longlong)0, 0);
-        need_update_row= TRUE;
-      }
+      
       if (is_next_intersect_all)
-      { /* initiate `intersect_count` to 0 for intersect */
+      { 
+        /* set up `intersect_counter` to 0 for intersect all*/
         table->field[1]->store((longlong)0, 0);
         need_update_row= TRUE;
       }
+
       if (table->field[0]->val_int() == 0)
         error= delete_record();
       else if (need_update_row)
-      { 
         error= table->file->ha_update_tmp_row(table->record[1],
                                               table->record[0]);
-      }
     } while (likely(!error));
-    file->ha_rnd_end();
+    table->file->ha_rnd_end();
   }
-  
 
   /* disable index and unfold */
   if (can_disable_index && is_index_enabled)
@@ -792,43 +806,37 @@ bool select_unit_ext::send_eof()
     /* disable index to insert duplicate records */
     table->file->ha_disable_indexes(HA_KEY_SWITCH_ALL); 
     is_index_enabled= FALSE;
-    /* temporary variable to store `table->field[0]` */
-    int dup_cnt; 
-    if (unlikely(file->ha_rnd_init_with_error(1)))
-      return 1;
-    do
+    if(!is_distinct)
     {
-      if (unlikely(error= file->ha_rnd_next(table->record[0])))
+      /* unfold if is ALL operation */
+      int dup_cnt; 
+      if (unlikely(table->file->ha_rnd_init_with_error(1)))
+        return 1;
+      do
       {
-        if (error == HA_ERR_END_OF_FILE)
+        if (unlikely(error= table->file->ha_rnd_next(table->record[0])))
         {
-          error= 0;
+          if (error == HA_ERR_END_OF_FILE)
+          {
+            error= 0;
+            break;
+          }
           break;
         }
-        break;
-      }
-      dup_cnt= table->field[0]->val_int();
-      if (dup_cnt == 1)
-        continue;
-      error= update_counter(0, 1);
-      // while (--dup_cnt)
-      // {
-      //   if(write_record() == 1)
-      //   {
-      //     error= 1;
-      //     break;
-      //   }
-      // }
-      if(unfold_record(dup_cnt))
-      {
-        /* restart the scan */
-        file->ha_rnd_end();
-        if (unlikely(file->ha_rnd_init_with_error(1)))
-          return 1;
-        continue;
-      }
-    } while (likely(!error));
-    file->ha_rnd_end();
+        dup_cnt= table->field[0]->val_int();
+        if (dup_cnt == 1)
+          continue;
+        error= update_counter(0, 1);
+        if(unfold_record(dup_cnt) == -1)
+        {
+          /* restart the scan */
+          if (unlikely(table->file->ha_rnd_init_with_error(1)))
+            return 1;
+          continue;
+        }
+      } while (likely(!error));
+      table->file->ha_rnd_end();
+    }
   }
 
   if (unlikely(error))

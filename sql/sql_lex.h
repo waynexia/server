@@ -207,6 +207,14 @@ enum sub_select_type
   GLOBAL_OPTIONS_TYPE, DERIVED_TABLE_TYPE, OLAP_TYPE
 };
 
+enum set_op_type
+{
+  UNSPECIFIED,
+  UNION_DISTINCT, UNION_ALL,
+  EXCEPT_DISTINCT, EXCEPT_ALL,
+  INTERSECT_DISTINCT, INTERSECT_ALL
+};
+
 inline int cmp_unit_op(enum sub_select_type op1, enum sub_select_type op2)
 {
   DBUG_ASSERT(op1 >= UNION_TYPE && op1 <= EXCEPT_TYPE);

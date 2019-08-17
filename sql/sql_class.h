@@ -5746,12 +5746,11 @@ class select_unit_ext :public select_unit
 {
 public:
   select_unit_ext(THD *thd_arg, st_select_lex* _union_distinct):
-    select_unit(thd_arg), offset(0), increment(0), duplicate_cnt(0),
-    additional_cnt(0), is_index_enabled(TRUE)
+    select_unit(thd_arg), offset(0), increment(0), is_index_enabled(TRUE), 
+    type(UNSPECIFIED), is_last_op(FALSE)
   {
     union_distinct = _union_distinct;
   };
-  void init();
   int send_data(List<Item> &items);
   void change_select();
   int unfold_record(int cnt);
@@ -5759,9 +5758,9 @@ public:
   
   int offset;
   int increment;
-  int duplicate_cnt;
-  int additional_cnt;
   bool is_index_enabled;
+  enum set_op_type type;
+  bool is_last_op;
   st_select_lex* union_distinct;
 };
 
