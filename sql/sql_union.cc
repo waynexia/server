@@ -123,7 +123,7 @@ int select_unit::send_data(List<Item> &values)
     table->null_catch_flags= CHECK_ROW_FOR_NULLS_TO_REJECT;
   
   fill_record(thd, table, table->field + addon_cnt, values, TRUE, FALSE);
-  /* set up initial value for records that need to be written */
+  /* set up initial values for records to be written */
   if(addon_cnt && step == UNION_TYPE)
   {
     DBUG_ASSERT(addon_cnt == 1);
@@ -183,10 +183,7 @@ int select_unit::send_data(List<Item> &values)
       DBUG_ASSERT(!table->triggers);
       if (table->field[0]->val_int() == prev_step)
       {
-        store_record(table, record[1]);
-        table->field[0]->store(curr_step, 0);
-        not_reported_error= table->file->ha_update_tmp_row(table->record[1],
-                                                            table->record[0]);
+        not_reported_error= update_counter(0, curr_step);
         rc= MY_TEST(not_reported_error);
         DBUG_ASSERT(rc != HA_ERR_RECORD_IS_THE_SAME);
       }
@@ -447,6 +444,55 @@ int select_unit::write_record()
 
 
 /*
+
+*/
+
+int select_unit::update_counter(int offset, longlong value)
+{
+  store_record(table, record[1]);
+  table->field[offset]->store(value, 0);
+  int error= table->file->ha_update_tmp_row(table->record[1],
+                                        table->record[0]);
+  return error;
+}
+
+/*
+
+*/
+
+void select_unit_ext::init()
+{
+  duplicate_cnt= 1;
+  additional_cnt= 0;
+}
+
+/*
+
+*/
+
+int select_unit_ext::unfold_record(int cnt)
+{
+  int error= 0;
+  bool is_duplicate= TRUE;
+  while (--cnt)
+  {
+    if(write_record() == 1)
+    {
+      error= 1;
+      // break;
+    }
+  }
+  if (error)
+  {
+    create_internal_tmp_table_from_heap(thd, table,
+                                        tmp_table_param.start_recinfo,
+                                        &tmp_table_param.recinfo,
+                                        write_err, 1, &is_duplicate);
+  }
+  return error;
+}
+
+/*
   @brief
     Delete a record
 
@@ -536,12 +582,12 @@ int select_unit_ext::send_data(List<Item> &values)
     table->null_catch_flags= CHECK_ROW_FOR_NULLS_TO_REJECT;
 
   fill_record(thd, table, table->field + addon_cnt, values, TRUE, FALSE);
-  /* set up initial value for records that need to be written */
+  /* set up initial values for records to be written */
   if( step == UNION_TYPE )
   {
-    /* duplicate counter initiate to 1 */
+    /* set duplicate counter to 1 */
     table->field[0]->store((longlong) 1, 1);
-    /* intersect counter initiate to 0 if have*/
+    /* set the other counter to 0 */
     if (addon_cnt == 2)
       table->field[1]->store((longlong) 0, 1);
   }
@@ -561,7 +607,6 @@ int select_unit_ext::send_data(List<Item> &values)
     table->null_catch_flags&= ~CHECK_ROW_FOR_NULLS_TO_REJECT;
     if (table->null_catch_flags)
     {
-      rc= 0;
       if (unlikely(not_reported_error))
       {
         DBUG_ASSERT(rc);
@@ -577,40 +622,41 @@ int select_unit_ext::send_data(List<Item> &values)
     if(!is_index_enabled && step == UNION_TYPE)
       rc= write_record();
 
-    /* found this record, then increase the counter by delta */
     else if(!(find_res= table->file->find_unique_row(table->record[0], 0)))
     {
-      store_record(table, record[1]);
-      longlong cnt= table->field[offset]->val_int()+ increment;
-      /* this record is not exist */
+      longlong cnt= table->field[offset]->val_int() + increment;
+      /* the record can be already deleted */
       if (cnt == 0)
         rc= delete_record();
       /* 
-        in INTERSECT ALL if the incremented counter is greater than the 
-        second one then we don't have to update
+        when processing not the first operand of INTERSECT ALL if the incremented 
+        counter is greater than the second one then we don't have to update
       */
-      else if( !(step == INTERSECT_TYPE && cnt > table->field[1 - offset]->val_int()))
-      {
-        table->field[offset]->store(cnt, 0);
-        not_reported_error|= table->file->ha_update_tmp_row(table->record[1],
-                                                          table->record[0]);
+      else if( !(step == INTERSECT_TYPE && 
+                 cnt > table->field[1 - offset]->val_int()))
+      {      
+        /* if the record is found, increment / decrement the duplicate counter */
+        not_reported_error= update_counter(offset, cnt);
         DBUG_ASSERT(!table->triggers);
         rc= MY_TEST(not_reported_error);
       }
     }
-    else  /* not found */
+    else if(step == UNION_TYPE) 
     {
-      if(step == UNION_TYPE)  /* is union type, need to write this record into table */
-        rc= write_record();
-      else  /* is intersect or except type, need not to process */
-      {
-        DBUG_ASSERT(step == INTERSECT_TYPE || step == EXCEPT_TYPE);
-        rc= 0;
-      }
+      /*
+        the record is not found and is union type, 
+        need to write this record into table 
+      */
+      rc= write_record();
+      /* 
+        we have nothing to do here if the processed operand is of 
+        INTERSECT or EXCEPT type
+      */
     }
   }
   else
-  {/* distinct */
+  {
+    /* is_distinct == true */
     switch(step)
     {
     case UNION_TYPE:
@@ -629,10 +675,7 @@ int select_unit_ext::send_data(List<Item> &values)
       {
         if (table->field[0]->val_int() == prev_step)
         {
-          store_record(table, record[1]);
-          table->field[0]->store((longlong) curr_step, 0);
-          not_reported_error= table->file->ha_update_tmp_row(table->record[1],
-                                                              table->record[0]);
+          not_reported_error= update_counter(0, curr_step);
           rc= MY_TEST(not_reported_error);
           DBUG_ASSERT(rc != HA_ERR_RECORD_IS_THE_SAME);
         }
@@ -676,7 +719,8 @@ bool select_unit_ext::send_eof()
   int error= 0;
   SELECT_LEX *next_sl= thd->lex->current_select->next_select();
   bool is_next_distinct= next_sl && next_sl->distinct;
-  bool is_next_intersect_all= next_sl && next_sl->get_linkage() == INTERSECT_TYPE && !is_distinct;
+  bool is_next_intersect_all= 
+    next_sl && next_sl->get_linkage() == INTERSECT_TYPE && !is_distinct;
   bool is_last_intersect_distinct= step == INTERSECT_TYPE && is_distinct &&
     next_sl && next_sl->get_linkage() != INTERSECT_TYPE;
   /* index can be disabled at the end of sequence or after the node which
@@ -745,10 +789,11 @@ bool select_unit_ext::send_eof()
   /* disable index and unfold */
   if (can_disable_index && is_index_enabled)
   {
-    table->file->ha_disable_indexes(HA_KEY_SWITCH_ALL); /* disable index to insert duplicate records */
+    /* disable index to insert duplicate records */
+    table->file->ha_disable_indexes(HA_KEY_SWITCH_ALL); 
     is_index_enabled= FALSE;
-    int dup_cnt; /* temporary variable to store `table->field[0]` */
-    bool _is_duplicate= TRUE; /* constant parameter, for create_internal_tmp_table_from_heap */
+    /* temporary variable to store `table->field[0]` */
+    int dup_cnt; 
     if (unlikely(file->ha_rnd_init_with_error(1)))
       return 1;
     do
@@ -765,27 +810,22 @@ bool select_unit_ext::send_eof()
       dup_cnt= table->field[0]->val_int();
       if (dup_cnt == 1)
         continue;
-      store_record(table, record[1]);
-      table->field[0]->store((longlong)1, 0);
-      error= table->file->ha_update_tmp_row(table->record[1],
-                                            table->record[0]);
-      while (--dup_cnt)
+      error= update_counter(0, 1);
+      // while (--dup_cnt)
+      // {
+      //   if(write_record() == 1)
+      //   {
+      //     error= 1;
+      //     break;
+      //   }
+      // }
+      if(unfold_record(dup_cnt))
       {
-        if(write_record() == 1)
-        {
-          error= 1;
-          break;
-        }
-        /* create_internal_tmp_table_from_heap will generate error if needed */
-        if (table->file->is_fatal_error(write_err, HA_CHECK_DUP) &&
-            create_internal_tmp_table_from_heap(thd, table,
-                                                tmp_table_param.start_recinfo,
-                                                &tmp_table_param.recinfo,
-                                                write_err, 1, &_is_duplicate))
-        {
-          error= 1;
-          break;
-        }
+        /* restart the scan */
+        file->ha_rnd_end();
+        if (unlikely(file->ha_rnd_init_with_error(1)))
+          return 1;
+        continue;
       }
     } while (likely(!error));
     file->ha_rnd_end();
@@ -1478,6 +1518,10 @@ bool st_select_lex_unit::prepare(TABLE_LIST *derived_arg,
                                               instantiate_tmp_table, false,
                                               0))
           goto err;
+        if(have_except_all_or_intersect_all)
+        {
+          union_result->init();
+        }
         if (!derived_arg->table)
         {
           derived_arg->table= with_element->rec_result->rec_tables.head();
