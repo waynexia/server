@@ -183,7 +183,7 @@ int select_unit::send_data(List<Item> &values)
       DBUG_ASSERT(!table->triggers);
       if (table->field[0]->val_int() == prev_step)
       {
-        not_reported_error= update_counter(0, curr_step);
+        not_reported_error= update_counter(table->field[0], curr_step);
         rc= MY_TEST(not_reported_error);
         DBUG_ASSERT(rc != HA_ERR_RECORD_IS_THE_SAME);
       }
@@ -458,10 +458,10 @@ int select_unit::write_record()
     -1  error occured
 */
 
-int select_unit::update_counter(int offset, longlong value)
+int select_unit::update_counter(Field* counter, longlong value)
 {
   store_record(table, record[1]);
-  table->field[offset]->store(value, 0);
+  counter->store(value, 0);
   int error= table->file->ha_update_tmp_row(table->record[1],
                                         table->record[0]);
   return error;
@@ -479,6 +479,8 @@ int select_unit::update_counter(int offset, longlong value)
 
 int select_unit_ext::unfold_record(int cnt)
 {
+
+  DBUG_ASSERT(cnt > 0);
   int error= 0;
   bool is_convertion_happened= false;
   // bool is_duplicate= TRUE;
@@ -543,31 +545,33 @@ void select_unit::cleanup()
 void select_unit_ext::change_select()
 {
   select_unit::change_select();
-  
   switch(step){
   case UNION_TYPE:
     increment= 1;
-    offset= 0;
-    type= UNION_DISTINCT;
+    curr_op_type= UNION_DISTINCT;
     break;
   case EXCEPT_TYPE:
     increment= -1;
-    offset= 0;
-    type= EXCEPT_DISTINCT;
+    curr_op_type= EXCEPT_DISTINCT;
     break;
   case INTERSECT_TYPE:
     increment= 1;
-    offset= 1;
-    type= INTERSECT_DISTINCT;
+    curr_op_type= INTERSECT_DISTINCT;
     break;
-  default: break;
+  default: DBUG_ASSERT(0);
   }
   if(!is_distinct)
     /* change type from DISTINCT to ALL */
-    type= (set_op_type)(type + 1);
+    curr_op_type= (set_op_type)(curr_op_type + 1);
 
   if(!thd->lex->current_select->next_select())
     is_last_op= TRUE;
+  
+  duplicate_cnt= table->field[addon_cnt - 1];
+  if(addon_cnt == 2)
+    additional_cnt= table->field[addon_cnt - 2];
+  else
+    additional_cnt= NULL;
 }
 
 
@@ -605,10 +609,10 @@ int select_unit_ext::send_data(List<Item> &values)
   if( step == UNION_TYPE )
   {
     /* set duplicate counter to 1 */
-    table->field[0]->store((longlong) 1, 1);
+    duplicate_cnt->store((longlong) 1, 1);
     /* set the other counter to 0 */
-    if (addon_cnt == 2)
-      table->field[1]->store((longlong) 0, 1);
+    if (curr_op_type == INTERSECT_ALL)
+      additional_cnt->store((longlong) 0, 1);
   }
 
   if (unlikely(thd->is_error()))
@@ -635,79 +639,155 @@ int select_unit_ext::send_data(List<Item> &values)
     }
   }
 
-  if(!is_distinct)
-  {
-    /* in the last UNION ALL subsequence */
-    if(!is_index_enabled && step == UNION_TYPE)
-      rc= write_record();
+  // if(!is_distinct)
+  // {
+  //   /* in the last UNION ALL subsequence */
+  //   if(!is_index_enabled && step == UNION_TYPE)
+  //     rc= write_record();
 
-    else if(!(find_res= table->file->find_unique_row(table->record[0], 0)))
+  //   else if(!(find_res= table->file->find_unique_row(table->record[0], 0)))
+  //   {
+  //     longlong cnt= table->field[offset]->val_int() + increment;
+  //     /* the record can be already deleted */
+  //     if (cnt == 0)
+  //       rc= delete_record();
+  //     /* 
+  //       when processing not the first operand of INTERSECT ALL if the incremented 
+  //       counter is greater than the second one then we don't have to update
+  //     */
+  //     else if( !(step == INTERSECT_TYPE && 
+  //                cnt > table->field[1 - offset]->val_int()))
+  //     {      
+  //       /* if the record is found, increment / decrement the duplicate counter */
+  //       not_reported_error= update_counter(offset, cnt);
+  //       DBUG_ASSERT(!table->triggers);
+  //       rc= MY_TEST(not_reported_error);
+  //     }
+  //   }
+  //   else if(step == UNION_TYPE) 
+  //   {
+  //     /*
+  //       the record is not found and is union type, 
+  //       need to write this record into table 
+  //     */
+  //     rc= write_record();
+  //     /* 
+  //       we have nothing to do here if the processed operand is of 
+  //       INTERSECT or EXCEPT type
+  //     */
+  //   }
+  // }
+  // else
+  // {
+  //   /* is_distinct == true */
+  //   switch(step)
+  //   {
+  //   case UNION_TYPE:
+  //     rc= write_record();
+  //     break;
+
+  //   case EXCEPT_TYPE:
+  //     if (!(find_res= table->file->find_unique_row(table->record[0], 0)))
+  //       rc= delete_record();
+  //     else
+  //       rc= not_reported_error= (find_res != 1);
+  //     break;
+
+  //   case INTERSECT_TYPE:
+  //     if (!(find_res= table->file->find_unique_row(table->record[0], 0))) 
+  //     {
+  //       if (table->field[1]->val_int() == prev_step)
+  //       {
+  //         not_reported_error= update_counter(1, curr_step);
+  //         rc= MY_TEST(not_reported_error);
+  //         DBUG_ASSERT(rc != HA_ERR_RECORD_IS_THE_SAME);
+  //       }
+  //       else
+  //         rc= delete_record();
+  //     }
+  //     else
+  //       rc= not_reported_error= (find_res != 1);
+  //     break;
+
+  //   default:
+  //     DBUG_ASSERT(0);
+  //   }
+  // }
+
+  switch(curr_op_type)
+  {
+  case UNION_ALL:
+    if(!is_index_enabled || 
+      (find_res= table->file->find_unique_row(table->record[0], 0)))
     {
-      longlong cnt= table->field[offset]->val_int() + increment;
-      /* the record can be already deleted */
-      if (cnt == 0)
+      rc= write_record();
+    }
+    else
+    {
+      longlong cnt= duplicate_cnt->val_int() + 1;
+      not_reported_error= update_counter(duplicate_cnt, cnt);
+      DBUG_ASSERT(!table->triggers);
+      rc= MY_TEST(not_reported_error);
+    }
+    break;
+
+  case EXCEPT_ALL:
+    if(!(find_res= table->file->find_unique_row(table->record[0], 0)))
+    {
+      longlong cnt= duplicate_cnt->val_int() - 1;
+      if(cnt == 0)
         rc= delete_record();
-      /* 
-        when processing not the first operand of INTERSECT ALL if the incremented 
-        counter is greater than the second one then we don't have to update
-      */
-      else if( !(step == INTERSECT_TYPE && 
-                 cnt > table->field[1 - offset]->val_int()))
-      {      
-        /* if the record is found, increment / decrement the duplicate counter */
-        not_reported_error= update_counter(offset, cnt);
+      else
+      {
+        not_reported_error= update_counter(duplicate_cnt, cnt);
         DBUG_ASSERT(!table->triggers);
         rc= MY_TEST(not_reported_error);
       }
     }
-    else if(step == UNION_TYPE) 
-    {
-      /*
-        the record is not found and is union type, 
-        need to write this record into table 
-      */
-      rc= write_record();
-      /* 
-        we have nothing to do here if the processed operand is of 
-        INTERSECT or EXCEPT type
-      */
-    }
-  }
-  else
-  {
-    /* is_distinct == true */
-    switch(step)
-    {
-    case UNION_TYPE:
-      rc= write_record();
-      break;
+    break;
 
-    case EXCEPT_TYPE:
-      if (!(find_res= table->file->find_unique_row(table->record[0], 0)))
-        rc= delete_record();
-      else
-        rc= not_reported_error= (find_res != 1);
-      break;
-
-    case INTERSECT_TYPE:
-      if (!(find_res= table->file->find_unique_row(table->record[0], 0))) 
+  case INTERSECT_ALL:
+    if(!(find_res= table->file->find_unique_row(table->record[0], 0)))
+    {
+      longlong cnt= duplicate_cnt->val_int() + 1;
+      if(cnt <= additional_cnt->val_int())
       {
-        if (table->field[1]->val_int() == prev_step)
-        {
-          not_reported_error= update_counter(1, curr_step);
-          rc= MY_TEST(not_reported_error);
-          DBUG_ASSERT(rc != HA_ERR_RECORD_IS_THE_SAME);
-        }
-        else
-          rc= delete_record();
+        not_reported_error= update_counter(duplicate_cnt, cnt);
+        DBUG_ASSERT(!table->triggers);
+        rc= MY_TEST(not_reported_error);
+      }
+    }
+    break;
+
+  case UNION_DISTINCT:
+    rc= write_record();
+    break;
+
+  case EXCEPT_DISTINCT:
+    if (!(find_res= table->file->find_unique_row(table->record[0], 0)))
+      rc= delete_record();
+    else
+      rc= not_reported_error= (find_res != 1);
+    break;
+
+  case INTERSECT_DISTINCT:
+    if (!(find_res= table->file->find_unique_row(table->record[0], 0))) 
+    {
+      if (additional_cnt->val_int() == prev_step)
+      {
+        not_reported_error= update_counter(duplicate_cnt, curr_step);
+        rc= MY_TEST(not_reported_error);
+        DBUG_ASSERT(rc != HA_ERR_RECORD_IS_THE_SAME);
       }
       else
-        rc= not_reported_error= (find_res != 1);
-      break;
-
-    default:
-      DBUG_ASSERT(0);
+        rc= delete_record();
     }
+    else
+      rc= not_reported_error= (find_res != 1);
+    break;
+
+  default:
+    DBUG_ASSERT(0);
   }
 
   if (unlikely(not_reported_error))
@@ -747,10 +827,14 @@ bool select_unit_ext::send_eof()
                         next_sl->get_linkage() == INTERSECT_TYPE && 
                         !next_sl->distinct;
   bool can_disable_index= curr_sl == union_distinct || is_last_op;
-  bool need_scan_file= (is_distinct && !is_next_distinct) || 
-    type == INTERSECT_ALL || is_next_intersect_all;
+  // bool need_scan_file= (is_distinct && !is_next_distinct) || 
+  //                       curr_op_type == INTERSECT_ALL || 
+  //                       is_next_intersect_all ;
 
-  if (need_scan_file)
+  if (((is_distinct && !is_next_distinct) || 
+      curr_op_type == INTERSECT_ALL || 
+      is_next_intersect_all) && 
+      !(can_disable_index && is_index_enabled))
   {
     bool need_update_row;
     if (unlikely(table->file->ha_rnd_init_with_error(1)))
@@ -772,28 +856,39 @@ bool select_unit_ext::send_eof()
       if (is_distinct && !is_next_distinct)
       { 
         /* set duplicate counter to 1 if next operation is ALL */
-        table->field[0]->store(1, 0);
+        duplicate_cnt->store(1, 0);
         need_update_row= TRUE;
       }
 
-      if (type == INTERSECT_ALL && 
-        table->field[0]->val_int() > table->field[1]->val_int())
+      if (is_next_intersect_all) 
       { 
-        /* take minimal between `counter` and `intersect_counter` for INTERSECT */
-        table->field[0]->store(table->field[1]->val_int(), 0);
-        need_update_row= TRUE;
-      }
-      
-      if (is_next_intersect_all)
-      { 
-        /* set up `intersect_counter` to 0 for intersect all*/
-        table->field[1]->store((longlong)0, 0);
-        need_update_row= TRUE;
+        longlong d_cnt_val= duplicate_cnt->val_int();
+        if(d_cnt_val == 0)
+          error= delete_record();
+        else 
+        {
+          if(curr_op_type == INTERSECT_ALL)
+          {
+            longlong a_cnt_val= additional_cnt->val_int();
+            if (a_cnt_val < d_cnt_val)
+              d_cnt_val= a_cnt_val;
+          }
+          additional_cnt->store(d_cnt_val, 0);
+          duplicate_cnt->store((longlong)0, 0);
+          need_update_row= TRUE;
+        }
       }
 
-      if (table->field[0]->val_int() == 0)
-        error= delete_record();
-      else if (need_update_row)
+      // if (is_next_intersect_all)
+      // { 
+      //   /* set up `intersect_counter` to 0 for intersect all*/
+      //   additional_cnt->store((longlong)0, 0);
+      //   need_update_row= TRUE;
+      // }
+
+      // if (additional_cnt->val_int() == 0)
+      //   error= delete_record();
+      if (need_update_row)
         error= table->file->ha_update_tmp_row(table->record[1],
                                               table->record[0]);
     } while (likely(!error));
@@ -801,7 +896,7 @@ bool select_unit_ext::send_eof()
   }
 
   /* disable index and unfold */
-  if (can_disable_index && is_index_enabled)
+  else if (can_disable_index && is_index_enabled)
   {
     /* disable index to insert duplicate records */
     table->file->ha_disable_indexes(HA_KEY_SWITCH_ALL); 
@@ -823,15 +918,51 @@ bool select_unit_ext::send_eof()
           }
           break;
         }
-        dup_cnt= table->field[0]->val_int();
+        longlong d_cnt_val= duplicate_cnt->val_int();
+        /* delete record if not exist in the second operand */
+        if(d_cnt_val == 0)
+        {
+          error= delete_record();
+          continue;
+        }
+        if (curr_op_type == INTERSECT_ALL) 
+        {
+          longlong a_cnt_val= additional_cnt->val_int();
+          if(d_cnt_val > a_cnt_val && a_cnt_val > 0)
+            dup_cnt= a_cnt_val;
+          else
+            dup_cnt= d_cnt_val;
+        }
+        else
+          dup_cnt= d_cnt_val;
+
         if (dup_cnt == 1)
           continue;
-        error= update_counter(0, 1);
+        else if(dup_cnt == 0)
+        {
+          error= delete_record();
+          continue;
+        }
+
+        duplicate_cnt->store((longlong)1, 0);
+        if(additional_cnt)
+          additional_cnt->store((longlong)0, 0);
+        error= table->file->ha_update_tmp_row(table->record[1],
+                                              table->record[0]);
+        if(unlikely(error))
+          break;
+        
         if(unfold_record(dup_cnt) == -1)
         {
           /* restart the scan */
           if (unlikely(table->file->ha_rnd_init_with_error(1)))
             return 1;
+            
+          duplicate_cnt= table->field[addon_cnt - 1];
+          if(addon_cnt == 2)
+            additional_cnt= table->field[addon_cnt - 2];
+          else
+            additional_cnt= NULL;
           continue;
         }
       } while (likely(!error));
@@ -1627,19 +1758,17 @@ cont:
         // add duplicate_count
         ++hidden;
         is_select_unit_ext= true;
-        init_item_int(thd, addon_fields[0]);
-        types.push_front(addon_fields[0]= addon_fields[0]);
-        addon_fields[0]->name.str= "__CNT_1";
-        addon_fields[0]->name.length= 7;
       }
       // add intersect_count
       if (have_intersect)
-      {
         ++hidden;
-        init_item_int(thd, addon_fields[1]);
-        types.push_front(addon_fields[1]= addon_fields[1]);
-        addon_fields[1]->name.str= "__CNT_2";
-        addon_fields[1]->name.length= 7;
+
+      for(uint i= 0; i< hidden; i++)
+      {
+        init_item_int(thd, addon_fields[i]);
+        types.push_front(addon_fields[i]= addon_fields[i]);
+        addon_fields[i]->name.str= i ? "__CNT_1" : "__CNT_2";
+        addon_fields[i]->name.length= 7;
       }
       bool error=
         union_result->create_result_table(thd, &types,
@@ -1784,6 +1913,7 @@ err:
     Not comatible with Oracle Mode.
 */
 
+// void st_select_lex_unit::optimize_bag_operation(bool is_upper_distinct)
 void st_select_lex_unit::optimize_bag_operation()
 {
   if(thd->variables.sql_mode & MODE_ORACLE)

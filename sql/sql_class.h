@@ -5714,7 +5714,7 @@ public:
   { return false; }
   int send_data(List<Item> &items);
   int write_record();
-  int update_counter(int offset, longlong value);
+  int update_counter(Field *counter, longlong value);
   int delete_record();
   bool is_send_data_set;
   bool send_eof();
@@ -5746,8 +5746,8 @@ class select_unit_ext :public select_unit
 {
 public:
   select_unit_ext(THD *thd_arg, st_select_lex* _union_distinct):
-    select_unit(thd_arg), offset(0), increment(0), is_index_enabled(TRUE), 
-    type(UNSPECIFIED), is_last_op(FALSE)
+    select_unit(thd_arg), increment(0), is_index_enabled(TRUE), 
+    curr_op_type(UNSPECIFIED), is_last_op(FALSE)
   {
     union_distinct = _union_distinct;
   };
@@ -5756,12 +5756,13 @@ public:
   int unfold_record(int cnt);
   bool send_eof();
   
-  int offset;
   int increment;
   bool is_index_enabled;
-  enum set_op_type type;
+  enum set_op_type curr_op_type;
   bool is_last_op;
   st_select_lex* union_distinct;
+  Field *duplicate_cnt;
+  Field *additional_cnt;
 };
 
 class select_union_recursive :public select_unit
