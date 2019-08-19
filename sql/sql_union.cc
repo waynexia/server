@@ -639,81 +639,6 @@ int select_unit_ext::send_data(List<Item> &values)
     }
   }
 
-  // if(!is_distinct)
-  // {
-  //   /* in the last UNION ALL subsequence */
-  //   if(!is_index_enabled && step == UNION_TYPE)
-  //     rc= write_record();
-
-  //   else if(!(find_res= table->file->find_unique_row(table->record[0], 0)))
-  //   {
-  //     longlong cnt= table->field[offset]->val_int() + increment;
-  //     /* the record can be already deleted */
-  //     if (cnt == 0)
-  //       rc= delete_record();
-  //     /* 
-  //       when processing not the first operand of INTERSECT ALL if the incremented 
-  //       counter is greater than the second one then we don't have to update
-  //     */
-  //     else if( !(step == INTERSECT_TYPE && 
-  //                cnt > table->field[1 - offset]->val_int()))
-  //     {      
-  //       /* if the record is found, increment / decrement the duplicate counter */
-  //       not_reported_error= update_counter(offset, cnt);
-  //       DBUG_ASSERT(!table->triggers);
-  //       rc= MY_TEST(not_reported_error);
-  //     }
-  //   }
-  //   else if(step == UNION_TYPE) 
-  //   {
-  //     /*
-  //       the record is not found and is union type, 
-  //       need to write this record into table 
-  //     */
-  //     rc= write_record();
-  //     /* 
-  //       we have nothing to do here if the processed operand is of 
-  //       INTERSECT or EXCEPT type
-  //     */
-  //   }
-  // }
-  // else
-  // {
-  //   /* is_distinct == true */
-  //   switch(step)
-  //   {
-  //   case UNION_TYPE:
-  //     rc= write_record();
-  //     break;
-
-  //   case EXCEPT_TYPE:
-  //     if (!(find_res= table->file->find_unique_row(table->record[0], 0)))
-  //       rc= delete_record();
-  //     else
-  //       rc= not_reported_error= (find_res != 1);
-  //     break;
-
-  //   case INTERSECT_TYPE:
-  //     if (!(find_res= table->file->find_unique_row(table->record[0], 0))) 
-  //     {
-  //       if (table->field[1]->val_int() == prev_step)
-  //       {
-  //         not_reported_error= update_counter(1, curr_step);
-  //         rc= MY_TEST(not_reported_error);
-  //         DBUG_ASSERT(rc != HA_ERR_RECORD_IS_THE_SAME);
-  //       }
-  //       else
-  //         rc= delete_record();
-  //     }
-  //     else
-  //       rc= not_reported_error= (find_res != 1);
-  //     break;
-
-  //   default:
-  //     DBUG_ASSERT(0);
-  //   }
-  // }
-
   switch(curr_op_type)
   {
   case UNION_ALL:
@@ -724,7 +649,7 @@ int select_unit_ext::send_data(List<Item> &values)
     }
     else
     {
-      longlong cnt= duplicate_cnt->val_int() + 1;
+      longlong cnt= duplicate_cnt->val_int() + increment;
       not_reported_error= update_counter(duplicate_cnt, cnt);
       DBUG_ASSERT(!table->triggers);
       rc= MY_TEST(not_reported_error);
@@ -734,7 +659,7 @@ int select_unit_ext::send_data(List<Item> &values)
   case EXCEPT_ALL:
     if(!(find_res= table->file->find_unique_row(table->record[0], 0)))
     {
-      longlong cnt= duplicate_cnt->val_int() - 1;
+      longlong cnt= duplicate_cnt->val_int() + increment;
       if(cnt == 0)
         rc= delete_record();
       else
@@ -749,7 +674,7 @@ int select_unit_ext::send_data(List<Item> &values)
   case INTERSECT_ALL:
     if(!(find_res= table->file->find_unique_row(table->record[0], 0)))
     {
-      longlong cnt= duplicate_cnt->val_int() + 1;
+      longlong cnt= duplicate_cnt->val_int() + increment;
       if(cnt <= additional_cnt->val_int())
       {
         not_reported_error= update_counter(duplicate_cnt, cnt);
@@ -827,9 +752,6 @@ bool select_unit_ext::send_eof()
                         next_sl->get_linkage() == INTERSECT_TYPE && 
                         !next_sl->distinct;
   bool can_disable_index= curr_sl == union_distinct || is_last_op;
-  // bool need_scan_file= (is_distinct && !is_next_distinct) || 
-  //                       curr_op_type == INTERSECT_ALL || 
-  //                       is_next_intersect_all ;
 
   if (((is_distinct && !is_next_distinct) || 
       curr_op_type == INTERSECT_ALL || 
@@ -879,15 +801,6 @@ bool select_unit_ext::send_eof()
         }
       }
 
-      // if (is_next_intersect_all)
-      // { 
-      //   /* set up `intersect_counter` to 0 for intersect all*/
-      //   additional_cnt->store((longlong)0, 0);
-      //   need_update_row= TRUE;
-      // }
-
-      // if (additional_cnt->val_int() == 0)
-      //   error= delete_record();
       if (need_update_row)
         error= table->file->ha_update_tmp_row(table->record[1],
                                               table->record[0]);
@@ -904,7 +817,7 @@ bool select_unit_ext::send_eof()
     if(!is_distinct)
     {
       /* unfold if is ALL operation */
-      int dup_cnt; 
+      longlong dup_cnt; 
       if (unlikely(table->file->ha_rnd_init_with_error(1)))
         return 1;
       do
@@ -918,31 +831,22 @@ bool select_unit_ext::send_eof()
           }
           break;
         }
-        longlong d_cnt_val= duplicate_cnt->val_int();
+        dup_cnt= duplicate_cnt->val_int();
         /* delete record if not exist in the second operand */
-        if(d_cnt_val == 0)
+        if(dup_cnt == 0)
         {
           error= delete_record();
           continue;
         }
         if (curr_op_type == INTERSECT_ALL) 
         {
-          longlong a_cnt_val= additional_cnt->val_int();
-          if(d_cnt_val > a_cnt_val && a_cnt_val > 0)
-            dup_cnt= a_cnt_val;
-          else
-            dup_cnt= d_cnt_val;
+          longlong add_cnt= additional_cnt->val_int();
+          if(dup_cnt > add_cnt && add_cnt > 0)
+            dup_cnt= add_cnt;
         }
-        else
-          dup_cnt= d_cnt_val;
 
         if (dup_cnt == 1)
           continue;
-        else if(dup_cnt == 0)
-        {
-          error= delete_record();
-          continue;
-        }
 
         duplicate_cnt->store((longlong)1, 0);
         if(additional_cnt)
@@ -957,7 +861,7 @@ bool select_unit_ext::send_eof()
           /* restart the scan */
           if (unlikely(table->file->ha_rnd_init_with_error(1)))
             return 1;
-            
+
           duplicate_cnt= table->field[addon_cnt - 1];
           if(addon_cnt == 2)
             additional_cnt= table->field[addon_cnt - 2];
@@ -1766,7 +1670,7 @@ cont:
       for(uint i= 0; i< hidden; i++)
       {
         init_item_int(thd, addon_fields[i]);
-        types.push_front(addon_fields[i]= addon_fields[i]);
+        types.push_front(addon_fields[i]);
         addon_fields[i]->name.str= i ? "__CNT_1" : "__CNT_2";
         addon_fields[i]->name.length= 7;
       }
@@ -1909,6 +1813,9 @@ err:
         then all set operations of this subsequence can be replaced for 
         UNION DISTINCT
     
+    For derived table it will look up outer select, and do optimize based on 
+    outer select.
+
     Variable "union_distinct" will be updated in the end.
     Not comatible with Oracle Mode.
 */
@@ -1935,6 +1842,15 @@ void st_select_lex_unit::optimize_bag_operation()
   */ 
   bool any_intersect_distinct= false;
   SELECT_LEX *prev_sl= first_select();
+
+  bool is_outer_distinct= false;
+  if (first_select()->outer_select())
+  {
+    is_outer_distinct= first_select()->outer_select()->next_select() ?
+      first_select()->outer_select()->next_select()->distinct :
+      first_select()->outer_select()->distinct;
+  }
+
   /* process INTERSECT subsequence in the begining */
   for (sl= prev_sl->next_select(); sl; prev_sl= sl, sl= sl->next_select())
   {
@@ -1954,6 +1870,11 @@ void st_select_lex_unit::optimize_bag_operation()
       }
     }
   }
+
+  /* if subquery only contains INTERSECT and outer is UNION DISTINCT*/
+  if(!sl && is_outer_distinct)
+    any_intersect_distinct= true;
+
   /* The first select of the current UNION ALL subsequence */
   SELECT_LEX *union_all_start= NULL;
   for ( ; sl; prev_sl= sl, sl = sl->next_select())
@@ -1981,22 +1902,33 @@ void st_select_lex_unit::optimize_bag_operation()
     }
     else
     { /* sl->distinct == true */ 
-      union_all_start= NULL;
-      /* dead code */
       for (SELECT_LEX *si= union_all_start; si && si != sl; si= si->next_select())
       {
           si->distinct= true;
       }
+      union_all_start= NULL;
       disable_index= sl;
     }
   }
+
+  if (is_outer_distinct)
+  {
+    for (SELECT_LEX *si= union_all_start; si && si != sl; si= si->next_select())
+    {
+        si->distinct= true;
+    }
+    union_all_start= NULL;
+    // how to deal with disable_index?
+    // maybe set it to NULL
+  }
+
   if (any_intersect_distinct ||
       (intersect_end != NULL && intersect_end->distinct))
   {
     for (sl= intersect_start; sl && sl != intersect_end; sl= sl->next_select())
     {
       sl->distinct= true;
-      if (disable_index->linkage == INTERSECT_TYPE)
+      if (disable_index && disable_index->linkage == INTERSECT_TYPE)
         disable_index= sl;
     }
   }

@@ -83,6 +83,45 @@ eval $q;
 eval EXPLAIN EXTENDED $q;
 drop table t4;
 
+--echo # test optimization with brackets
+
+let $q=
+(
+    (select 1 except select 5 union all select 6)
+        union
+    (select 2 intersect all select 3 intersect all select 4)
+        except
+    (select 7 intersect all select 8)
+)
+    union all
+(select 9 union all select 10)
+    except all
+select 11;
+eval $q;
+eval EXPLAIN EXTENDED $q;
+
+let $q=
+(select 1 union all select 2)
+    union
+(select 3 union all select 4);
+eval $q;
+eval EXPLAIN EXTENDED $q;
+
+let $q=
+(select 1 intersect all select 2)
+    except 
+select 3;
+eval $q;
+eval EXPLAIN EXTENDED $q;
+
+let $q=
+(select 1 intersect all select 2 intersect all select 3)
+    intersect 
+(select 4 intersect all select 5);
+eval $q;
+eval EXPLAIN EXTENDED $q;
+
+
 --echo # test set operations with table value constructor
 
 (values (1,1),(1,1),(1,1),(2,2),(2,2),(3,3),(9,9))
@@ -394,58 +433,58 @@ select 1 intersect all select 2 intersect all select 3 union select 4 except sel
 select 1 union select 2 except all select 3 union select 4;
 select 1 union all select 2 union all select 3 union select 4;
 
---echo # test with limited resource
-
-set @@max_heap_table_size= 1024;
-set @@tmp_table_size= 1024;
-
-create table t1 (a int, b int);
-insert into t1 values (1,1),(2,2),(3,3),(4,4),(5,5),(6,6),(7,7),(8,8),(9,9),(0,0);
-insert into t1 select * from t1;
-insert into t1 select * from t1;
-insert into t1 select * from t1;
-create table t2 (a int, b int);
-insert into t2 values (10,10),(11,11),(12,12),(13,13),(14,14),(5,5),(6,6),(7,7),(8,8),(9,9);
-insert into t2 select * from t2;
-insert into t2 select * from t2;
-insert into t2 select * from t2;
-
-
-select * from t1
-INTERSECT ALL 
-select * from t2;
-
-select * from t1
-EXCEPT ALL
-select * from t2;
-
-select * from t1
-INTERSECT ALL
-select * from t2
-UNION ALL 
-select * from t1
-EXCEPT ALL
-select * from t2;
-
-delete from t1;
-delete from t2;
-
-insert into t1 values (1,1),(2,2),(3,3),(4,4),(5,5),(6,6),(7,7),(8,8),(9,9),(0,0);
-insert into t1 select a+10, b+10 from t1;
-insert into t1 select a+20, b+20 from t1;
-insert into t1 select a+40, b+40 from t1;
-insert into t1 select a+80, b+80 from t1;
-insert into t2 values (10,10),(11,11),(12,12),(13,13),(14,14),(5,5),(6,6),(7,7),(8,8),(9,9);
-insert into t2 select a+10, b+10 from t2;
-insert into t2 select a+20, b+20 from t2;
-insert into t2 select a+40, b+40 from t2;
-insert into t2 select a+80, b+80 from t2;
-
-select * from t1
-UNION ALL
-select * from t2
-EXCEPT ALL
-values (1,1);
-
-drop table t1;
-drop table t2;
+#--echo # test with limited resource
+#
+#set @@max_heap_table_size= 1024;
+#set @@tmp_table_size= 1024;
+#
+#create table t1 (a int, b int);
+#insert into t1 values (1,1),(2,2),(3,3),(4,4),(5,5),(6,6),(7,7),(8,8),(9,9),(0,0);
+#insert into t1 select * from t1;
+#insert into t1 select * from t1;
+#insert into t1 select * from t1;
+#create table t2 (a int, b int);
+#insert into t2 values (10,10),(11,11),(12,12),(13,13),(14,14),(5,5),(6,6),(7,7),(8,8),(9,9);
+#insert into t2 select * from t2;
+#insert into t2 select * from t2;
+#insert into t2 select * from t2;
+#
+#
+#select * from t1
+#INTERSECT ALL 
+#select * from t2;
+#
+#select * from t1
+#EXCEPT ALL
+#select * from t2;
+#
+#select * from t1
+#INTERSECT ALL
+#select * from t2
+#UNION ALL 
+#select * from t1
+#EXCEPT ALL
+#select * from t2;
+#
+#delete from t1;
+#delete from t2;
+#
+#insert into t1 values (1,1),(2,2),(3,3),(4,4),(5,5),(6,6),(7,7),(8,8),(9,9),(0,0);
+#insert into t1 select a+10, b+10 from t1;
+#insert into t1 select a+20, b+20 from t1;
+#insert into t1 select a+40, b+40 from t1;
+#insert into t1 select a+80, b+80 from t1;
+#insert into t2 values (10,10),(11,11),(12,12),(13,13),(14,14),(5,5),(6,6),(7,7),(8,8),(9,9);
+#insert into t2 select a+10, b+10 from t2;
+#insert into t2 select a+20, b+20 from t2;
+#insert into t2 select a+40, b+40 from t2;
+#insert into t2 select a+80, b+80 from t2;
+#
+#select * from t1
+#UNION ALL
+#select * from t2
+#EXCEPT ALL
+#values (1,1);
+#
+#drop table t1;
+#drop table t2;

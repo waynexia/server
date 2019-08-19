@@ -5739,8 +5739,14 @@ public:
   virtual void change_select();
 };
 
-/*
-  derived class to process operations that need extra fields
+/**
+  @class select_unit_ext
+  @brief Handle set operations that need to use extra fields as counter.
+
+  When a optimized query contains operations like EXCEPT ALL and INTERSECT ALL
+  we need to count the number of hom many duplicates in there. This class is
+  derived from select_unit which only handles query not uses EXCEPT ALL or 
+  INTERSECT ALL operations. 
  */
 class select_unit_ext :public select_unit
 {
@@ -5753,15 +5759,23 @@ public:
   };
   int send_data(List<Item> &items);
   void change_select();
+  /* Insert duplicate record to make the total number of a record equals to cnt */
   int unfold_record(int cnt);
   bool send_eof();
   
+  /* Value can be 1 or -1. Stands for insert or delete a record*/
   int increment;
+  /* Indicate whether the index of result table is enabled or not */
   bool is_index_enabled;
+  /* Which operation is currently */
   enum set_op_type curr_op_type;
+  /* Is current operation the last one or not */
   bool is_last_op;
+  /* Disable index at this lex node */
   st_select_lex* union_distinct;
+  /* Stores the value of duplicate counter */
   Field *duplicate_cnt;
+  /* Stores the value of another counter will be used in INTERSECT ALL*/
   Field *additional_cnt;
 };
 
