@@ -1323,14 +1323,6 @@ bool st_select_lex_unit::prepare(TABLE_LIST *derived_arg,
     max/min subquery (ALL/ANY optimization)
   */
   result= sel_result;
-
-  /* save distinct */
-  if(!stored)
-  {
-    for(SELECT_LEX *s= first_sl; s; s= s->next_select())
-      s->saved_distinct= s->distinct;
-    stored= TRUE;
-  }
     
   if (prepared)
   {
@@ -1415,11 +1407,16 @@ bool st_select_lex_unit::prepare(TABLE_LIST *derived_arg,
     {
       if (!is_recursive)
         /* 
-          class "select_unit_ext" handles query contains EXCEPT ALL and / or INTERSECT ALL.
-          others are handled by class "select_unit" 
+          class "select_unit_ext" handles query contains EXCEPT ALL and / or 
+          INTERSECT ALL. Others are handled by class "select_unit" 
+          If have EXCEPT ALL or INTERSECT ALL in the query. First operand
+          should be UNION ALL
         */
         if(have_except_all_or_intersect_all)
+        {
           union_result= new (thd->mem_root) select_unit_ext(thd,union_distinct);
+          first_sl->distinct= FALSE;
+        }
         else
 	        union_result= new (thd->mem_root) select_unit(thd);
       else
@@ -1784,11 +1781,6 @@ cont:
 
   thd->lex->current_select= lex_select_save;
 
-  /* restore distinct if is analysising view */
-  if(thd->lex->context_analysis_only & CONTEXT_ANALYSIS_ONLY_VIEW)
-    for(SELECT_LEX *s= first_sl; s; s= s->next_select())
-        s->distinct= s->saved_distinct;
-
   DBUG_RETURN(saved_error || thd->is_fatal_error);
 
 err:
@@ -1820,10 +1812,11 @@ err:
     Not comatible with Oracle Mode.
 */
 
-// void st_select_lex_unit::optimize_bag_operation(bool is_upper_distinct)
 void st_select_lex_unit::optimize_bag_operation()
 {
-  if(thd->variables.sql_mode & MODE_ORACLE)
+  /* skip run optimize for ORACLE MODE or CREATE VIEW */
+  if ((thd->variables.sql_mode & MODE_ORACLE) || 
+    (thd->lex->context_analysis_only & CONTEXT_ANALYSIS_ONLY_VIEW))
     return;
   SELECT_LEX *sl;
   /* INTERSECT subsequence can occur only at the very beginning */
@@ -2089,12 +2082,6 @@ bool st_select_lex_unit::exec()
   {
     if (!fake_select_lex && !(with_element && with_element->is_recursive))
       union_result->cleanup();
-    /*
-      the first unit is not the first one in SQL sentence.
-      hard set it to false to avoid error.
-      maybe it could be move to some other suitable place.
-    */
-    select_cursor->distinct= false;
     for (SELECT_LEX *sl= select_cursor; sl; sl= sl->next_select())
     {
       ha_rows records_at_start= 0;
@@ -2149,7 +2136,9 @@ bool st_select_lex_unit::exec()
 	  sl->tvc->exec(sl);
 	else
 	  sl->join->exec();
-        if (sl == union_distinct && !(with_element && with_element->is_recursive) && !is_select_unit_ext)
+        if (sl == union_distinct && 
+            !(with_element && with_element->is_recursive) && 
+            !is_select_unit_ext)
 	{
           // This is UNION DISTINCT, so there should be a fake_select_lex
           DBUG_ASSERT(fake_select_lex != NULL);

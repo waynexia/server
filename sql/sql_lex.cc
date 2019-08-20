@@ -2348,7 +2348,7 @@ void st_select_lex_unit::init_query()
   select_limit_cnt= HA_POS_ERROR;
   offset_limit_cnt= 0;
   union_distinct= 0;
-  prepared= optimized= optimized_2= stored= executed= bag_optimized= 0;
+  prepared= optimized= optimized_2= executed= bag_optimized= 0;
   optimize_started= 0;
   item= 0;
   union_result= 0;
@@ -2981,7 +2981,6 @@ bool st_select_lex::setup_ref_array(THD *thd, uint order_group_num)
 
 void st_select_lex_unit::print(String *str, enum_query_type query_type)
 {
-  // bool union_all= !union_distinct;
   if (with_clause)
     with_clause->print(str, query_type);
   for (SELECT_LEX *sl= first_select(); sl; sl= sl->next_select())
@@ -3008,8 +3007,6 @@ void st_select_lex_unit::print(String *str, enum_query_type query_type)
           str->append(STRING_WITH_LEN("all "));
         break;
       }
-      // if (sl == union_distinct)
-      //   union_all= TRUE;
     }
     if (sl->braces)
       str->append('(');

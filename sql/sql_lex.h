@@ -728,7 +728,6 @@ public:
   }
   enum sub_select_type get_linkage() { return linkage; }
   bool distinct;
-  bool saved_distinct;
   bool no_table_names_allowed; /* used for global order by */
 
   static void *operator new(size_t size, MEM_ROOT *mem_root) throw ()
@@ -861,7 +860,6 @@ public:
   bool  prepared, // prepare phase already performed for UNION (unit)
     optimized, // optimize phase already performed for UNION (unit)
     optimized_2,
-    stored,
     executed, // already executed
     cleaned,
     bag_optimized;
