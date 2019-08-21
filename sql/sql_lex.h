@@ -960,7 +960,7 @@ public:
   bool prepare(TABLE_LIST *derived_arg, select_result *sel_result,
                ulong additional_options);
   bool optimize();
-  void optimize_bag_operation(SELECT_LEX *first_sl);
+  void optimize_bag_operation(bool is_outer_distinct);
   bool exec();
   bool exec_recursive();
   bool cleanup();
@@ -1031,7 +1031,7 @@ Field_pair *find_matching_field_pair(Item *item, List<Field_pair> pair_list);
 #define TOUCHED_SEL_COND 1/* WHERE/HAVING/ON should be reinited before use */
 #define TOUCHED_SEL_DERIVED (1<<1)/* derived should be reinited before use */
 
-
+#define UNIT_NEST_FL        1
 /*
   SELECT_LEX - store information of parsed SELECT statment
 */
@@ -1054,7 +1054,7 @@ public:
     select1->first_nested points to select1.
   */
   st_select_lex *first_nested;
-
+  uint8 nest_flags; 
   Name_resolution_context context;
   LEX_CSTRING db;
   Item *where, *having;                         /* WHERE & HAVING clauses */
@@ -1579,6 +1579,8 @@ public:
   void add_statistics(SELECT_LEX_UNIT *unit);
   bool make_unique_derived_name(THD *thd, LEX_CSTRING *alias);
   void lex_start(LEX *plex);
+  bool is_unit_nest() { return (nest_flags & UNIT_NEST_FL); }
+  void mark_as_unit_nest() { nest_flags= UNIT_NEST_FL; }
 };
 typedef class st_select_lex SELECT_LEX;
 

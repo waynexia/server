@@ -5390,7 +5390,7 @@ LEX::wrap_unit_into_derived(SELECT_LEX_UNIT *unit)
   Name_resolution_context *context= &wrapping_sel->context;
   context->init();
   wrapping_sel->automatic_brackets= FALSE;
-
+  wrapping_sel->mark_as_unit_nest();
   wrapping_sel->register_unit(unit, context);
 
   /* stuff dummy SELECT * FROM (...) */
