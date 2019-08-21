@@ -1362,9 +1362,14 @@ bool st_select_lex_unit::prepare(TABLE_LIST *derived_arg,
   found_rows_for_union= first_sl->options & OPTION_FOUND_ROWS;
   is_union_select= is_unit_op() || fake_select_lex || single_tvc;
 
-  /* will not run optimize if is under Oracle mode or have been optimized */
+  /* will only optimize once */
   if(!bag_optimized)
-    optimize_bag_operation();
+  {
+    SELECT_LEX *outer_most= first_select();
+    while(outer_most->outer_select())
+      outer_most= outer_most->outer_select();
+    optimize_bag_operation(outer_most);
+  }
 
   for (SELECT_LEX *s= first_sl; s; s= s->next_select())
   {
@@ -1794,6 +1799,8 @@ err:
   @brief
     Optimize a sequence of set operations
 
+  @param first_sl first select of the level now under processing
+
   @details
     The method optimizes with the following rules:
     - (1)If a subsequence of INTERSECT contains at least one INTERSECT DISTINCT
@@ -1812,12 +1819,18 @@ err:
     Not comatible with Oracle Mode.
 */
 
-void st_select_lex_unit::optimize_bag_operation()
+void st_select_lex_unit::optimize_bag_operation(SELECT_LEX *first_sl)
 {
-  /* skip run optimize for ORACLE MODE or CREATE VIEW */
+  /* 
+    skip run optimize for:
+      ORACLE MODE  
+      CREATE VIEW
+      this isn't a set operation
+  */
   if ((thd->variables.sql_mode & MODE_ORACLE) || 
     (thd->lex->context_analysis_only & CONTEXT_ANALYSIS_ONLY_VIEW))
     return;
+
   SELECT_LEX *sl;
   /* INTERSECT subsequence can occur only at the very beginning */
   /* The first select with linkage == INTERSECT_TYPE */
@@ -1834,14 +1847,14 @@ void st_select_lex_unit::optimize_bag_operation()
     linkage == INTERSECT_TYPE && distinct==true
   */ 
   bool any_intersect_distinct= false;
-  SELECT_LEX *prev_sl= first_select();
+  SELECT_LEX *prev_sl= first_sl;
 
   bool is_outer_distinct= false;
-  if (first_select()->outer_select())
+  if (first_sl->outer_select())
   {
-    is_outer_distinct= first_select()->outer_select()->next_select() ?
-      first_select()->outer_select()->next_select()->distinct :
-      first_select()->outer_select()->distinct;
+    is_outer_distinct= first_sl->outer_select()->next_select() ?
+      first_sl->outer_select()->next_select()->distinct :
+      false;
   }
 
   /* process INTERSECT subsequence in the begining */
@@ -1934,6 +1947,16 @@ void st_select_lex_unit::optimize_bag_operation()
     disable_index= intersect_end;
   /* union_distinct controls when to disable index */
   union_distinct= disable_index;
+
+  /* revursive call this function for whole lex tree */
+  for(sl= first_sl; sl; sl= sl->next_select())
+  {
+    if(sl->first_inner_unit())
+    {
+      optimize_bag_operation(sl->first_inner_unit()->first_select());
+    }
+  }
+
   /* mark as optimized */
   bag_optimized= TRUE;
 }

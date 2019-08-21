@@ -960,7 +960,7 @@ public:
   bool prepare(TABLE_LIST *derived_arg, select_result *sel_result,
                ulong additional_options);
   bool optimize();
-  void optimize_bag_operation();
+  void optimize_bag_operation(SELECT_LEX *first_sl);
   bool exec();
   bool exec_recursive();
   bool cleanup();
