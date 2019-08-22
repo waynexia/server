@@ -1,43 +1,58 @@
 create table t1 (a int, b int) engine=MyISAM;
 create table t2 (c int, d int) engine=MyISAM;
-insert into t1 values (1,1),(2,2),(3,3),(2,2);
-insert into t2 values (2,2),(3,3),(5,5);
+insert into t1 values (1,1),(2,2),(3,3),(2,2),(4,4),(4,4),(4,4);
+insert into t2 values (1,1),(1,1),(1,1),(2,2),(3,3),(3,3),(5,5);
 select * from t1 except select * from t2;
 a	b
-1	1
+4	4
 select * from t1 except all select * from t2;
 a	b
-1	1
+4	4
 2	2
+4	4
+4	4
+select * from t1 except all select c+1,d+1 from t2;
+a	b
+1	1
+4	4
 (select * from t1) except all (select * from t2);
 a	b
-1	1
+4	4
 2	2
+4	4
+4	4
 select * from ((select * from t1) except all (select * from t2)) a;
 a	b
-1	1
+4	4
 2	2
+4	4
+4	4
 select * from ((select a from t1) except all (select c from t2)) a;
 a
-1
+4
 2
+4
+4
 select * from t1 except all select * from t1 union all select * from t1 union all select * from t1 except select * from t2;
 a	b
-1	1
+4	4
 select * from t1 except all select * from t1 union all select * from t1 union all select * from t1 except all select * from t2;
 a	b
-1	1
-1	1
 2	2
 2	2
 2	2
-3	3
+4	4
+4	4
+4	4
+4	4
+4	4
+4	4
 select * from (select * from t1 except all select * from t2) q1 except all select * from (select * from t1 except all select * from t2) q2;
 a	b
 EXPLAIN select * from t1 except all select * from t2;
 id	select_type	table	type	possible_keys	key	key_len	ref	rows	Extra
-1	PRIMARY	t1	ALL	NULL	NULL	NULL	NULL	4	
-2	EXCEPT	t2	ALL	NULL	NULL	NULL	NULL	3	
+1	PRIMARY	t1	ALL	NULL	NULL	NULL	NULL	7	
+2	EXCEPT	t2	ALL	NULL	NULL	NULL	NULL	7	
 NULL	EXCEPT RESULT	<except1,2>	ALL	NULL	NULL	NULL	NULL	NULL	
 EXPLAIN format=json select * from t1 except all select * from t2;
 EXPLAIN
@@ -53,7 +68,7 @@ EXPLAIN
             "table": {
               "table_name": "t1",
               "access_type": "ALL",
-              "rows": 4,
+              "rows": 7,
               "filtered": 100
             }
           }
@@ -65,7 +80,7 @@ EXPLAIN
             "table": {
               "table_name": "t2",
               "access_type": "ALL",
-              "rows": 3,
+              "rows": 7,
               "filtered": 100
             }
           }
@@ -76,16 +91,16 @@ EXPLAIN
 }
 EXPLAIN extended (select * from t1) except all (select * from t2);
 id	select_type	table	type	possible_keys	key	key_len	ref	rows	filtered	Extra
-1	PRIMARY	t1	ALL	NULL	NULL	NULL	NULL	4	100.00	
-2	EXCEPT	t2	ALL	NULL	NULL	NULL	NULL	3	100.00	
+1	PRIMARY	t1	ALL	NULL	NULL	NULL	NULL	7	100.00	
+2	EXCEPT	t2	ALL	NULL	NULL	NULL	NULL	7	100.00	
 NULL	EXCEPT RESULT	<except1,2>	ALL	NULL	NULL	NULL	NULL	NULL	NULL	
 Warnings:
 Note	1003	(/* select#1 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1`) except all (/* select#2 */ select `test`.`t2`.`c` AS `c`,`test`.`t2`.`d` AS `d` from `test`.`t2`)
 EXPLAIN extended select * from ((select * from t1) except all (select * from t2)) a;
 id	select_type	table	type	possible_keys	key	key_len	ref	rows	filtered	Extra
-1	PRIMARY	<derived2>	ALL	NULL	NULL	NULL	NULL	4	100.00	
-2	DERIVED	t1	ALL	NULL	NULL	NULL	NULL	4	100.00	
-3	EXCEPT	t2	ALL	NULL	NULL	NULL	NULL	3	100.00	
+1	PRIMARY	<derived2>	ALL	NULL	NULL	NULL	NULL	7	100.00	
+2	DERIVED	t1	ALL	NULL	NULL	NULL	NULL	7	100.00	
+3	EXCEPT	t2	ALL	NULL	NULL	NULL	NULL	7	100.00	
 NULL	EXCEPT RESULT	<except2,3>	ALL	NULL	NULL	NULL	NULL	NULL	NULL	
 Warnings:
 Note	1003	/* select#1 */ select `a`.`a` AS `a`,`a`.`b` AS `b` from (/* select#2 */ select `test`.`t1`.`a` AS `a`,`test`.`t1`.`b` AS `b` from `test`.`t1` except all (/* select#3 */ select `test`.`t2`.`c` AS `c`,`test`.`t2`.`d` AS `d` from `test`.`t2`)) `a`
@@ -100,8 +115,8 @@ ANALYZE
       "table_name": "<derived2>",
       "access_type": "ALL",
       "r_loops": 1,
-      "rows": 4,
-      "r_rows": 2,
+      "rows": 7,
+      "r_rows": 4,
       "r_total_time_ms": "REPLACED",
       "filtered": 100,
       "r_filtered": 100,
@@ -111,7 +126,7 @@ ANALYZE
             "table_name": "<except2,3>",
             "access_type": "ALL",
             "r_loops": 1,
-            "r_rows": 2,
+            "r_rows": 4,
             "query_specifications": [
               {
                 "query_block": {
@@ -122,8 +137,8 @@ ANALYZE
                     "table_name": "t1",
                     "access_type": "ALL",
                     "r_loops": 1,
-                    "rows": 4,
-                    "r_rows": 4,
+                    "rows": 7,
+                    "r_rows": 7,
                     "r_total_time_ms": "REPLACED",
                     "filtered": 100,
                     "r_filtered": 100
@@ -140,8 +155,8 @@ ANALYZE
                     "table_name": "t2",
                     "access_type": "ALL",
                     "r_loops": 1,
-                    "rows": 3,
-                    "r_rows": 3,
+                    "rows": 7,
+                    "r_rows": 7,
                     "r_total_time_ms": "REPLACED",
                     "filtered": 100,
                     "r_filtered": 100
@@ -166,8 +181,8 @@ ANALYZE
       "table_name": "<derived2>",
       "access_type": "ALL",
       "r_loops": 1,
-      "rows": 4,
-      "r_rows": 2,
+      "rows": 7,
+      "r_rows": 4,
       "r_total_time_ms": "REPLACED",
       "filtered": 100,
       "r_filtered": 100,
@@ -177,7 +192,7 @@ ANALYZE
             "table_name": "<except2,3>",
             "access_type": "ALL",
             "r_loops": 1,
-            "r_rows": 2,
+            "r_rows": 4,
             "query_specifications": [
               {
                 "query_block": {
@@ -188,8 +203,8 @@ ANALYZE
                     "table_name": "t1",
                     "access_type": "ALL",
                     "r_loops": 1,
-                    "rows": 4,
-                    "r_rows": 4,
+                    "rows": 7,
+                    "r_rows": 7,
                     "r_total_time_ms": "REPLACED",
                     "filtered": 100,
                     "r_filtered": 100
@@ -206,8 +221,8 @@ ANALYZE
                     "table_name": "t2",
                     "access_type": "ALL",
                     "r_loops": 1,
-                    "rows": 3,
-                    "r_rows": 3,
+                    "rows": 7,
+                    "r_rows": 7,
                     "r_total_time_ms": "REPLACED",
                     "filtered": 100,
                     "r_filtered": 100
@@ -223,26 +238,36 @@ ANALYZE
 }
 select * from ((select a from t1) except all (select c from t2)) a;
 a
-1
+4
 2
+4
+4
 prepare stmt from "(select a,b from t1) except all (select c,d from t2)";
 execute stmt;
 a	b
-1	1
+4	4
 2	2
+4	4
+4	4
 execute stmt;
 a	b
-1	1
+4	4
 2	2
+4	4
+4	4
 prepare stmt from "select * from ((select a,b from t1) except all (select c,d from t2)) a";
 execute stmt;
 a	b
-1	1
+4	4
 2	2
+4	4
+4	4
 execute stmt;
 a	b
-1	1
+4	4
 2	2
+4	4
+4	4
 drop tables t1,t2;
 create table t1 (a int, b int) engine=MyISAM;
 create table t2 (c int, d int) engine=MyISAM;

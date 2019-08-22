@@ -1,10 +1,11 @@
 create table t1 (a int, b int) engine=MyISAM;
 create table t2 (c int, d int) engine=MyISAM;
-insert into t1 values (1,1),(2,2),(3,3),(2,2);
-insert into t2 values (2,2),(3,3),(5,5);
+insert into t1 values (1,1),(2,2),(3,3),(2,2),(4,4),(4,4),(4,4);
+insert into t2 values (1,1),(1,1),(1,1),(2,2),(3,3),(3,3),(5,5);
 
 select * from t1 except select * from t2;
 select * from t1 except all select * from t2;
+select * from t1 except all select c+1,d+1 from t2;
 (select * from t1) except all (select * from t2);
 select * from ((select * from t1) except all (select * from t2)) a;
 select * from ((select a from t1) except all (select c from t2)) a;

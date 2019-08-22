@@ -122,7 +122,7 @@ int select_unit::send_data(List<Item> &values)
   if (table->no_rows_with_nulls)
     table->null_catch_flags= CHECK_ROW_FOR_NULLS_TO_REJECT;
   
-  fill_record(thd, table, table->field + addon_cnt, values, TRUE, FALSE);
+  fill_record(thd, table, table->field + addon_cnt, values, true, false);
   /* set up initial values for records to be written */
   if (addon_cnt && step == UNION_TYPE)
   {
@@ -425,7 +425,7 @@ int select_unit::write_record()
       */
       return -1;
     }
-    bool is_duplicate= FALSE;
+    bool is_duplicate= false;
     /* create_internal_tmp_table_from_heap will generate error if needed */
     if (table->file->is_fatal_error(write_err, HA_CHECK_DUP))
     {
@@ -563,9 +563,6 @@ void select_unit_ext::change_select()
   if (!is_distinct)
     /* change type from DISTINCT to ALL */
     curr_op_type= (set_op_type)(curr_op_type + 1);
-
-  if (!thd->lex->current_select->next_select())
-    is_last_op= TRUE;
   
   duplicate_cnt= table->field[addon_cnt - 1];
   if (addon_cnt == 2)
@@ -605,7 +602,7 @@ int select_unit_ext::send_data(List<Item> &values)
   if (table->no_rows_with_nulls)
     table->null_catch_flags= CHECK_ROW_FOR_NULLS_TO_REJECT;
 
-  fill_record(thd, table, table->field + addon_cnt, values, TRUE, FALSE);
+  fill_record(thd, table, table->field + addon_cnt, values, true, false);
   /* set up initial values for records to be written */
   if ( step == UNION_TYPE )
   {
@@ -752,21 +749,21 @@ bool select_unit_ext::send_eof()
                         next_sl && 
                         next_sl->get_linkage() == INTERSECT_TYPE && 
                         !next_sl->distinct;
-  bool can_disable_index= curr_sl == union_distinct || is_last_op;
+  bool can_disable_index= curr_sl == union_distinct || !next_sl;
 
   if (((is_distinct && !is_next_distinct) || 
       curr_op_type == INTERSECT_ALL || 
       is_next_intersect_all) && 
       !(can_disable_index && is_index_enabled))
   {
-    if (is_last_op)
+    if (!next_sl)
       DBUG_ASSERT(curr_op_type != INTERSECT_ALL);
     bool need_update_row;
     if (unlikely(table->file->ha_rnd_init_with_error(1)))
       return 1;
     do
     {
-      need_update_row= FALSE;
+      need_update_row= false;
       if (unlikely(error= table->file->ha_rnd_next(table->record[0])))
       {
         if (error == HA_ERR_END_OF_FILE)
@@ -782,7 +779,7 @@ bool select_unit_ext::send_eof()
       { 
         /* set duplicate counter to 1 if next operation is ALL */
         duplicate_cnt->store(1, 0);
-        need_update_row= TRUE;
+        need_update_row= true;
       }
 
       if (is_next_intersect_all) 
@@ -800,7 +797,7 @@ bool select_unit_ext::send_eof()
           }
           additional_cnt->store(d_cnt_val, 0);
           duplicate_cnt->store((longlong)0, 0);
-          need_update_row= TRUE;
+          need_update_row= true;
         }
       }
 
@@ -816,7 +813,7 @@ bool select_unit_ext::send_eof()
   {
     /* disable index to insert duplicate records */
     table->file->ha_disable_indexes(HA_KEY_SWITCH_ALL); 
-    is_index_enabled= FALSE;
+    is_index_enabled= false;
     if (!is_distinct)
     {
       /* unfold if is ALL operation */
@@ -836,10 +833,6 @@ bool select_unit_ext::send_eof()
           }
           break;
         }
-        // if (!records)
-        //   break;
-        // --records;
-        // table->file->ha_rnd_next(table->record[0]);
         dup_cnt= duplicate_cnt->val_int();
         /* delete record if not exist in the second operand */
         if (dup_cnt == 0)
@@ -1293,8 +1286,8 @@ bool st_select_lex_unit::prepare(TABLE_LIST *derived_arg,
   uint union_part_count= 0;
   select_result *tmp_result;
   bool is_union_select;
-  bool have_except= FALSE, have_intersect= FALSE, 
-    have_except_all_or_intersect_all= FALSE;
+  bool have_except= false, have_intersect= false, 
+    have_except_all_or_intersect_all= false;
   bool instantiate_tmp_table= false;
   bool single_tvc= !first_sl->next_select() && first_sl->tvc &&
                    !fake_select_lex;
@@ -1387,7 +1380,7 @@ bool st_select_lex_unit::prepare(TABLE_LIST *derived_arg,
     case INTERSECT_TYPE:
       have_intersect= TRUE;
       if (!s->distinct){
-        have_except_all_or_intersect_all= TRUE;
+        have_except_all_or_intersect_all= true;
       }
       break;
     case EXCEPT_TYPE:
@@ -1429,7 +1422,8 @@ bool st_select_lex_unit::prepare(TABLE_LIST *derived_arg,
         if (have_except_all_or_intersect_all)
         {
           union_result= new (thd->mem_root) select_unit_ext(thd,union_distinct);
-          first_sl->distinct= FALSE;
+          first_sl->distinct= false;
+          is_using_ext= true;
         }
         else
 	        union_result= new (thd->mem_root) select_unit(thd);
@@ -1959,14 +1953,14 @@ void st_select_lex_unit::optimize_bag_operation(bool is_outer_distinct)
   }
 
   /* mark as optimized */
-  bag_optimized= TRUE;
+  bag_optimized= true;
 }
 
 
 /**
   Run optimization phase.
 
-  @return FALSE unit successfully passed optimization phase.
+  @return false unit successfully passed optimization phase.
   @return TRUE an error occur.
 */
 bool st_select_lex_unit::optimize()
@@ -1976,10 +1970,10 @@ bool st_select_lex_unit::optimize()
   DBUG_ENTER("st_select_lex_unit::optimize");
 
   if (optimized && !uncacheable && !describe)
-    DBUG_RETURN(FALSE);
+    DBUG_RETURN(false);
 
   if (with_element && with_element->is_recursive && optimize_started)
-    DBUG_RETURN(FALSE);
+    DBUG_RETURN(false);
   optimize_started= true;
 
   if (uncacheable || !item || !item->assigned() || describe)
@@ -1999,7 +1993,8 @@ bool st_select_lex_unit::optimize()
         table->file->info(HA_STATUS_VARIABLE);
       }
       /* re-enabling indexes for next subselect iteration */
-      if (union_distinct && table->file->ha_enable_indexes(HA_KEY_SWITCH_ALL))
+      if ((union_result->force_enable_index_if_needed() || union_distinct) &&
+          table->file->ha_enable_indexes(HA_KEY_SWITCH_ALL))
       {
         DBUG_ASSERT(0);
       }

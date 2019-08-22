@@ -5696,7 +5696,7 @@ public:
   TABLE *table;
 
   select_unit(THD *thd_arg):
-    select_result_interceptor(thd_arg), addon_cnt(0), table(0), is_send_data_set(FALSE)
+    select_result_interceptor(thd_arg), addon_cnt(0), table(0), is_send_data_set(false)
   {
     init();
     tmp_table_param.init();
@@ -5737,6 +5737,10 @@ public:
     is_distinct = true;
   }
   virtual void change_select();
+  virtual bool force_enable_index_if_needed()
+  {
+    return false;
+  }
 };
 
 /**
@@ -5751,17 +5755,22 @@ public:
 class select_unit_ext :public select_unit
 {
 public:
-  select_unit_ext(THD *thd_arg, st_select_lex* _union_distinct):
+  select_unit_ext(THD *thd_arg, st_select_lex* union_distinct_arg):
     select_unit(thd_arg), increment(0), is_index_enabled(TRUE), 
-    curr_op_type(UNSPECIFIED), is_last_op(FALSE)
+    curr_op_type(UNSPECIFIED)
   {
-    union_distinct = _union_distinct;
+    union_distinct = union_distinct_arg;
   };
   int send_data(List<Item> &items);
   void change_select();
   /* Insert duplicate record to make the total number of a record equals to cnt */
   int unfold_record(int cnt);
   bool send_eof();
+  bool force_enable_index_if_needed()
+  {
+    is_index_enabled= true;
+    return true;
+  }
   
   /* Value can be 1 or -1. Stands for insert or delete a record*/
   int increment;
@@ -5769,8 +5778,6 @@ public:
   bool is_index_enabled;
   /* Which operation is currently */
   enum set_op_type curr_op_type;
-  /* Is current operation the last one or not */
-  bool is_last_op;
   /* Disable index at this lex node */
   st_select_lex* union_distinct;
   /* Stores the value of duplicate counter */

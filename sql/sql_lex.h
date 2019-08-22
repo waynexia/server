@@ -833,6 +833,8 @@ class st_select_lex_unit: public st_select_lex_node {
 protected:
   TABLE_LIST result_table_list;
   select_unit *union_result;
+  /* The type of union_result is select_unit_ext or not */
+  bool is_using_ext;
   ulonglong found_rows_for_union;
   bool saved_error;
 
@@ -848,7 +850,7 @@ public:
 public:
   // Ensures that at least all members used during cleanup() are initialized.
   st_select_lex_unit()
-    : union_result(NULL), table(NULL), result(NULL),
+    : union_result(NULL), is_using_ext(FALSE), table(NULL), result(NULL),
       cleaned(false),
       fake_select_lex(NULL)
   {
