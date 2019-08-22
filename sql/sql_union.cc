@@ -161,6 +161,9 @@ int select_unit::send_data(List<Item> &values)
   {
   case UNION_TYPE:
     rc= write_record();
+    /* no reaction with conversion */
+    if (rc == -2)
+      rc= 0;
     break;
 
   case EXCEPT_TYPE:
@@ -644,6 +647,9 @@ int select_unit_ext::send_data(List<Item> &values)
       (find_res= table->file->find_unique_row(table->record[0], 0)))
     {
       rc= write_record();
+      /* no reaction with conversion */
+      if (rc == -2)
+        rc= 0;
     }
     else
     {
@@ -684,6 +690,9 @@ int select_unit_ext::send_data(List<Item> &values)
 
   case UNION_DISTINCT:
     rc= write_record();
+    /* no reaction with conversion */
+    if (rc == -2)
+      rc= 0;
     break;
 
   case EXCEPT_DISTINCT:
