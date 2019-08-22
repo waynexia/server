@@ -5755,11 +5755,10 @@ public:
 class select_unit_ext :public select_unit
 {
 public:
-  select_unit_ext(THD *thd_arg, st_select_lex* union_distinct_arg):
+  select_unit_ext(THD *thd_arg):
     select_unit(thd_arg), increment(0), is_index_enabled(TRUE), 
     curr_op_type(UNSPECIFIED)
   {
-    union_distinct = union_distinct_arg;
   };
   int send_data(List<Item> &items);
   void change_select();
@@ -5771,6 +5770,18 @@ public:
     is_index_enabled= true;
     return true;
   }
+  bool disable_index_if_needed(SELECT_LEX *curr_sl) 
+  { 
+    if (is_index_enabled && 
+        (curr_sl == curr_sl->master_unit()->union_distinct || 
+         !curr_sl->next_select()) )
+    {
+      is_index_enabled= false;
+      table->file->ha_disable_indexes(HA_KEY_SWITCH_ALL);  
+      return true;
+    }
+    return false;
+  }
   
   /* Value can be 1 or -1. Stands for insert or delete a record*/
   int increment;
@@ -5778,8 +5789,6 @@ public:
   bool is_index_enabled;
   /* Which operation is currently */
   enum set_op_type curr_op_type;
-  /* Disable index at this lex node */
-  st_select_lex* union_distinct;
   /* Stores the value of duplicate counter */
   Field *duplicate_cnt;
   /* Stores the value of another counter will be used in INTERSECT ALL*/

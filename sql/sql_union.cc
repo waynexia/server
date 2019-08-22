@@ -749,12 +749,12 @@ bool select_unit_ext::send_eof()
                         next_sl && 
                         next_sl->get_linkage() == INTERSECT_TYPE && 
                         !next_sl->distinct;
-  bool can_disable_index= curr_sl == union_distinct || !next_sl;
+  bool need_unfold= (disable_index_if_needed(curr_sl) && !is_distinct);
 
   if (((is_distinct && !is_next_distinct) || 
       curr_op_type == INTERSECT_ALL || 
       is_next_intersect_all) && 
-      !(can_disable_index && is_index_enabled))
+      !need_unfold)
   {
     if (!next_sl)
       DBUG_ASSERT(curr_op_type != INTERSECT_ALL);
@@ -808,72 +808,64 @@ bool select_unit_ext::send_eof()
     table->file->ha_rnd_end();
   }
 
-  /* disable index and unfold */
-  else if (can_disable_index && is_index_enabled)
+  /*  unfold */
+  else if (need_unfold)
   {
-    /* disable index to insert duplicate records */
-    table->file->ha_disable_indexes(HA_KEY_SWITCH_ALL); 
-    is_index_enabled= false;
-    if (!is_distinct)
+    /* unfold if is ALL operation */
+    longlong dup_cnt; 
+    if (unlikely(table->file->ha_rnd_init_with_error(1)))
+      return 1;
+    do
     {
-      /* unfold if is ALL operation */
-      table->file->info(HA_STATUS_VARIABLE);
-      int records= table->file->stats.records;
-      longlong dup_cnt; 
-      if (unlikely(table->file->ha_rnd_init_with_error(1)))
-        return 1;
-      do
+      if (unlikely(error= table->file->ha_rnd_next(table->record[0])))
       {
-        if (unlikely(error= table->file->ha_rnd_next(table->record[0])))
+        if (error == HA_ERR_END_OF_FILE)
         {
-          if (error == HA_ERR_END_OF_FILE)
-          {
-            error= 0;
-            break;
-          }
+          error= 0;
           break;
         }
-        dup_cnt= duplicate_cnt->val_int();
-        /* delete record if not exist in the second operand */
-        if (dup_cnt == 0)
-        {
-          error= delete_record();
-          continue;
-        }
-        if (curr_op_type == INTERSECT_ALL) 
-        {
-          longlong add_cnt= additional_cnt->val_int();
-          if (dup_cnt > add_cnt && add_cnt > 0)
-            dup_cnt= add_cnt;
-        }
+        break;
+      }
+      dup_cnt= duplicate_cnt->val_int();
+      /* delete record if not exist in the second operand */
+      if (dup_cnt == 0)
+      {
+        error= delete_record();
+        continue;
+      }
+      if (curr_op_type == INTERSECT_ALL) 
+      {
+        longlong add_cnt= additional_cnt->val_int();
+        if (dup_cnt > add_cnt && add_cnt > 0)
+          dup_cnt= add_cnt;
+      }
 
-        if (dup_cnt == 1)
-          continue;
+      if (dup_cnt == 1)
+        continue;
 
-        duplicate_cnt->store((longlong)1, 0);
-        if (additional_cnt)
-          additional_cnt->store((longlong)0, 0);
-        error= table->file->ha_update_tmp_row(table->record[1],
-                                              table->record[0]);
-        if (unlikely(error))
-          break;
-        
-        if (unfold_record(dup_cnt) == -1)
-        {
-          /* restart the scan */
-          if (unlikely(table->file->ha_rnd_init_with_error(1)))
-            return 1;
+      duplicate_cnt->store((longlong)1, 0);
+      if (additional_cnt)
+        additional_cnt->store((longlong)0, 0);
+      error= table->file->ha_update_tmp_row(table->record[1],
+                                            table->record[0]);
+      if (unlikely(error))
+        break;
+      
+      if (unfold_record(dup_cnt) == -1)
+      {
+        /* restart the scan */
+        if (unlikely(table->file->ha_rnd_init_with_error(1)))
+          return 1;
 
-          duplicate_cnt= table->field[addon_cnt - 1];
-          if (addon_cnt == 2)
-            additional_cnt= table->field[addon_cnt - 2];
-          else
-            additional_cnt= NULL;
-          continue;
-        }
-      } while (likely(!error));
-      table->file->ha_rnd_end();
-    }
+        duplicate_cnt= table->field[addon_cnt - 1];
+        if (addon_cnt == 2)
+          additional_cnt= table->field[addon_cnt - 2];
+        else
+          additional_cnt= NULL;
+        continue;
+      }
+    } while (likely(!error));
+    table->file->ha_rnd_end();
   }
 
   if (unlikely(error))
@@ -1365,11 +1357,8 @@ bool st_select_lex_unit::prepare(TABLE_LIST *derived_arg,
   is_union_select= is_unit_op() || fake_select_lex || single_tvc;
 
   /* will only optimize once */
-  if (!bag_optimized)
+  if (!bag_optimized && !is_recursive)
   {
-    SELECT_LEX *outer_most= first_select();
-    while (outer_most->outer_select())
-      outer_most= outer_most->outer_select();
     optimize_bag_operation(false);
   }
 
@@ -1421,7 +1410,7 @@ bool st_select_lex_unit::prepare(TABLE_LIST *derived_arg,
         */
         if (have_except_all_or_intersect_all)
         {
-          union_result= new (thd->mem_root) select_unit_ext(thd,union_distinct);
+          union_result= new (thd->mem_root) select_unit_ext(thd);
           first_sl->distinct= false;
           is_using_ext= true;
         }
@@ -1829,10 +1818,12 @@ void st_select_lex_unit::optimize_bag_operation(bool is_outer_distinct)
       ORACLE MODE  
       CREATE VIEW
       PREPARE ... FROM 
+      recursive
   */
   if ((thd->variables.sql_mode & MODE_ORACLE) || 
     (thd->lex->context_analysis_only & CONTEXT_ANALYSIS_ONLY_VIEW) ||
-    (fake_select_lex != NULL && thd->stmt_arena->is_stmt_prepare()))
+    (fake_select_lex != NULL && thd->stmt_arena->is_stmt_prepare()) ||
+    (with_element && with_element->is_recursive ))
     return;
   DBUG_ASSERT(!bag_optimized);
 

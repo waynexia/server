@@ -2463,6 +2463,7 @@ void st_select_lex::init_select()
   curr_tvc_name= 0;
   in_tvc= false;
   versioned_tables= 0;
+  nest_flags= 0;
 }
 
 /*
