@@ -5743,15 +5743,61 @@ public:
   }
 };
 
+
 /**
   @class select_unit_ext
+
   @brief Handle set operations that need to use extra fields as counter.
 
-  When a optimized query contains operations like EXCEPT ALL and INTERSECT ALL
-  we need to count the number of hom many duplicates in there. This class is
-  derived from select_unit which only handles query not uses EXCEPT ALL or 
-  INTERSECT ALL operations. 
+  This class is for query expressions that contain INTERSECT ALL or EXCEPT all
+  operations. The class is directly derived from the class select_unit.
+  Two extra fields (member "duplicate_cnt" and "additional_cnt") are used in
+  this class. But additional_cnt will only exist for query expression that
+  contains INTERSECT. Following are some examples.
+
+  Let table t1(i int) contains (1),(1),(1),(2),(2),(3),(3)
+            t2(i int) contains (1),(2),(2),(3),(3),(3)
+            t3(i int) contains (1),(1),(2),(2),(3),(4)
+
+  - For the query "select i from t1 INTERSECT ALL select i from t2":
+    In the first call to send_data(), we just put      |add_cnt|dup_cnt| i |
+    the record into table and increase dup_cnt, makes  |0      |3      |1  |
+    the value of dup_cnt equals to the number of that  |0      |2      |2  |
+    record. So after that, the table contains:         |0      |2      |3  |
+
+    In send_eof(), the value of dup_cnt will be put    |add_cnt|dup_cnt| i |
+    into add_cnt, and dup_cnt will be initialize to    |3      |0      |1  |
+    zero. So the table will be:                        |2      |0      |2  |
+                                                       |2      |0      |3  |
+
+    In the second call to send_data(), we will         |add_cnt|dup_cnt| i |
+    increase dup_cnt. The result is:                   |3      |1      |1  |
+                                                       |2      |2      |2  |
+                                                       |2      |3      |3  |
+
+    In the second call to send_eof(), we take the      |add_cnt|dup_cnt| i |
+    minimum between add_cnt and dup_cnt. Delete record |0      |1      |1  |
+    if one of them are zero. Then will disable index   |0      |1      |2  |
+    and unfold record. add_cnt (if have) and dup_cnt   |0      |1      |2  |
+    will be set to default values which are 0 and 1    |0      |1      |3  |
+    Finally the table will be:                         |0      |1      |3  |
+
+  - For the query "select i from t2 EXCEPT ALL select i from t3":
+    Because the query doesn't contain INTERSECT, this time     |dup_cnt| i |
+    there is no additional_cnt in the table. When entering the |1      |1  |
+    first call to send_eof(), the table is like that:          |2      |2  |
+    And nothing will be done in this send_eof().               |3      |3  |
+
+    In the second call to send_data(), we read record from the |dup_cnt| i |
+    second operand and decrease corresponding dup_cnt. If a    |2      |3  |
+    record's dup_cnt equal to 0 after a decrement that record
+    will be deleted.
+
+    Finally, we disable index and unfold duplicate record in   |dup_cnt| i |
+    send_eof(). The table will be:                             |1      |3  |
+                                                               |1      |3  |
  */
+
 class select_unit_ext :public select_unit
 {
 public:

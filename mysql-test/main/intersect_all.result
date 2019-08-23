@@ -861,7 +861,7 @@ insert into t2 values (4), (5), (9), (1), (8), (9), (2), (2);
 create table t3 (a int);
 insert into t3 values (8), (1), (8), (2), (3), (7), (2);
 select * from t1 where a > 4
-union all 
+union all
 select * from t2 where a < 5
 intersect all
 select * from t3 where a < 5;
@@ -873,7 +873,7 @@ a
 7
 explain extended
 select * from t1 where a > 4
-union all 
+union all
 select * from t2 where a < 5
 intersect all
 select * from t3 where a < 5;
