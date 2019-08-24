@@ -833,8 +833,6 @@ class st_select_lex_unit: public st_select_lex_node {
 protected:
   TABLE_LIST result_table_list;
   select_unit *union_result;
-  /* The type of union_result is select_unit_ext or not */
-  bool is_using_ext;
   ulonglong found_rows_for_union;
   bool saved_error;
 
@@ -850,9 +848,9 @@ public:
 public:
   // Ensures that at least all members used during cleanup() are initialized.
   st_select_lex_unit()
-    : union_result(NULL), is_using_ext(FALSE), table(NULL), result(NULL),
-      cleaned(false), bag_optimized(false),
-      fake_select_lex(NULL)
+    : union_result(NULL), table(NULL), result(NULL),
+      cleaned(false), bag_set_op_optimized(false),
+      have_except_all_or_intersect_all(false), fake_select_lex(NULL)
   {
   }
 
@@ -864,9 +862,10 @@ public:
     optimized_2,
     executed, // already executed
     cleaned,
-    bag_optimized;
+    bag_set_op_optimized;
 
   bool optimize_started;
+  bool have_except_all_or_intersect_all;
 
   // list of fields which points to temporary table for union
   List<Item> item_list;
@@ -934,9 +933,9 @@ public:
     fake_select_lex is used.
   */
   st_select_lex *saved_fake_select_lex;
-
-  st_select_lex *union_distinct; /* pointer to the last node before last subsequence of UNION ALL */
-  bool is_select_unit_ext; /* is union_result a object of class select_unit_ext or not */
+  
+  /* pointer to the last node before last subsequence of UNION ALL */
+  st_select_lex *union_distinct;
   bool describe; /* union exec() called for EXPLAIN */
   Procedure *last_procedure;     /* Pointer to procedure, if such exists */
 
@@ -1532,7 +1531,9 @@ public:
 
   bool is_set_op()
   {
-    return linkage == UNION_TYPE || linkage == EXCEPT_TYPE || linkage == INTERSECT_TYPE;
+    return linkage == UNION_TYPE || 
+           linkage == EXCEPT_TYPE || 
+           linkage == INTERSECT_TYPE;
   }
 
 private:

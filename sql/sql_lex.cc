@@ -2348,7 +2348,8 @@ void st_select_lex_unit::init_query()
   select_limit_cnt= HA_POS_ERROR;
   offset_limit_cnt= 0;
   union_distinct= 0;
-  prepared= optimized= optimized_2= executed= bag_optimized= 0;
+  prepared= optimized= optimized_2= executed= 0;
+  bag_set_op_optimized= 0;
   optimize_started= 0;
   item= 0;
   union_result= 0;
@@ -2365,7 +2366,7 @@ void st_select_lex_unit::init_query()
   with_element= 0;
   columns_are_renamed= false;
   with_wrapped_tvc= false;
-  is_select_unit_ext= false;
+  have_except_all_or_intersect_all= false;
 }
 
 void st_select_lex::init_query()
@@ -2994,20 +2995,16 @@ void st_select_lex_unit::print(String *str, enum_query_type query_type)
         DBUG_ASSERT(0);
       case UNION_TYPE:
         str->append(STRING_WITH_LEN(" union "));
-        if (!sl->distinct)
-          str->append(STRING_WITH_LEN("all "));
         break;
       case INTERSECT_TYPE:
         str->append(STRING_WITH_LEN(" intersect "));
-        if (!sl->distinct)
-          str->append(STRING_WITH_LEN("all "));
         break;
       case EXCEPT_TYPE:
         str->append(STRING_WITH_LEN(" except "));
-        if (!sl->distinct)
-          str->append(STRING_WITH_LEN("all "));
         break;
       }
+      if (!sl->distinct)
+        str->append(STRING_WITH_LEN("all "));
     }
     if (sl->braces)
       str->append('(');

@@ -10,7 +10,7 @@ select * from t1 except all select c+1,d+1 from t2;
 select * from ((select * from t1) except all (select * from t2)) a;
 select * from ((select a from t1) except all (select c from t2)) a;
 select * from t1 except all select * from t1 union all select * from t1 union all select * from t1 except select * from t2;
---sorted_result
+
 select * from t1 except all select * from t1 union all select * from t1 union all select * from t1 except all select * from t2;
 
 select * from (select * from t1 except all select * from t2) q1 except all select * from (select * from t1 except all select * from t2) q2;
@@ -20,9 +20,9 @@ EXPLAIN format=json select * from t1 except all select * from t2;
 EXPLAIN extended (select * from t1) except all (select * from t2);
 EXPLAIN extended select * from ((select * from t1) except all (select * from t2)) a;
 
---replace_regex /"r_total_time_ms": [0-9e\.\-+]*,/"r_total_time_ms": "REPLACED",/
+--source include/analyze-format.inc
 ANALYZE format=json select * from ((select a,b from t1) except all (select c,d from t2)) a;
---replace_regex /"r_total_time_ms": [0-9e\.\-+]*,/"r_total_time_ms": "REPLACED",/
+--source include/analyze-format.inc
 ANALYZE format=json select * from ((select a from t1) except all (select c from t2)) a;
 select * from ((select a from t1) except all (select c from t2)) a;
 
@@ -55,9 +55,9 @@ EXPLAIN select * from ((select a,b,e,f from t1,t3) except all (select c,d,g,h fr
 EXPLAIN extended select * from ((select a,b,e,f from t1,t3) except all (select c,d,g,h from t2,t4)) t;
 EXPLAIN format=json select * from ((select a,b,e,f from t1,t3) except all (select c,d,g,h from t2,t4)) t;
 
---replace_regex /"r_total_time_ms": [0-9e\.\-+]*,/"r_total_time_ms": "REPLACED",/
+--source include/analyze-format.inc
 ANALYZE format=json (select a,b,e,f from t1,t3) except all (select c,d,g,h from t2,t4);
---replace_regex /"r_total_time_ms": [0-9e\.\-+]*,/"r_total_time_ms": "REPLACED",/
+--source include/analyze-format.inc
 ANALYZE format=json select * from ((select a,b,e,f from t1,t3) except all (select c,d,g,h from t2,t4)) t;
 
 prepare stmt from "(select a,b,e,f from t1,t3) except all (select c,d,g,h from t2,t4)";

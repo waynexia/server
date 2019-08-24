@@ -5688,15 +5688,15 @@ class select_unit :public select_result_interceptor
 public:
   uint curr_step, prev_step, curr_sel;
   enum sub_select_type step;
-  bool is_distinct;
 public:
-  int addon_cnt;
   TMP_TABLE_PARAM tmp_table_param;
+  /* Number of additional (hidden) field of the used temporary table */
+  int addon_cnt;
   int write_err; /* Error code from the last send_data->ha_write_row call. */
   TABLE *table;
 
   select_unit(THD *thd_arg):
-    select_result_interceptor(thd_arg), addon_cnt(0), table(0), is_send_data_set(false)
+    select_result_interceptor(thd_arg), addon_cnt(0), table(0)
   {
     init();
     tmp_table_param.init();
@@ -5716,7 +5716,6 @@ public:
   int write_record();
   int update_counter(Field *counter, longlong value);
   int delete_record();
-  bool is_send_data_set;
   bool send_eof();
   virtual bool flush();
   void cleanup();
@@ -5734,68 +5733,108 @@ public:
     curr_sel= UINT_MAX;
     step= UNION_TYPE;
     write_err= 0;
-    is_distinct = true;
   }
   virtual void change_select();
-  virtual bool force_enable_index_if_needed()
-  {
-    return false;
-  }
+  virtual bool force_enable_index_if_needed() { return false; }
 };
 
 
 /**
   @class select_unit_ext
 
-  @brief Handle set operations that need to use extra fields as counter.
+  The class used when processing rows produced by operands of query expressions
+  containing INTERSECT ALL and/or EXCEPT all operations. One or two extra fields
+  of the temporary to store the rows of the partial and final result can be employed.
+  Both of them contain counters. The second additional field is used only when
+  the processed query expression contains INTERSECT ALL.
 
-  This class is for query expressions that contain INTERSECT ALL or EXCEPT all
-  operations. The class is directly derived from the class select_unit.
-  Two extra fields (member "duplicate_cnt" and "additional_cnt") are used in
-  this class. But additional_cnt will only exist for query expression that
-  contains INTERSECT. Following are some examples.
+  Consider how these extra fields are used.
 
-  Let table t1(i int) contains (1),(1),(1),(2),(2),(3),(3)
-            t2(i int) contains (1),(2),(2),(3),(3),(3)
-            t3(i int) contains (1),(1),(2),(2),(3),(4)
+  Let
+    table t1 (f char(8))
+    table t2 (f char(8))
+    table t3 (f char(8))
+  contain the following sets:
+    ("b"),("a"),("d"),("c"),("b"),("a"),("c"),("a")
+    ("c"),("b"),("c"),("c"),("a"),("b"),("g")
+    ("c"),("a"),("b"),("d"),("b"),("e")
 
-  - For the query "select i from t1 INTERSECT ALL select i from t2":
-    In the first call to send_data(), we just put      |add_cnt|dup_cnt| i |
-    the record into table and increase dup_cnt, makes  |0      |3      |1  |
-    the value of dup_cnt equals to the number of that  |0      |2      |2  |
-    record. So after that, the table contains:         |0      |2      |3  |
+  - Let's demonstrate how the the set operation INTERSECT ALL is proceesed
+    for the query
+              SELECT f FROM t1 INTERSECT ALL SELECT f FROM t2
 
-    In send_eof(), the value of dup_cnt will be put    |add_cnt|dup_cnt| i |
-    into add_cnt, and dup_cnt will be initialize to    |3      |0      |1  |
-    zero. So the table will be:                        |2      |0      |2  |
-                                                       |2      |0      |3  |
+    When send_data() is called for the rows of the first operand we put
+    the processed record into the temporary table if there was no such record
+    setting dup_cnt field to 1 and add_cnt field to 0 and increment the
+    counter in the dup_cnt field by one otherwise. We get
 
-    In the second call to send_data(), we will         |add_cnt|dup_cnt| i |
-    increase dup_cnt. The result is:                   |3      |1      |1  |
-                                                       |2      |2      |2  |
-                                                       |2      |3      |3  |
+      |add_cnt|dup_cnt| f |
+      |0      |2      |b  |
+      |0      |3      |a  |
+      |0      |1      |d  |
+      |0      |2      |c  |
 
-    In the second call to send_eof(), we take the      |add_cnt|dup_cnt| i |
-    minimum between add_cnt and dup_cnt. Delete record |0      |1      |1  |
-    if one of them are zero. Then will disable index   |0      |1      |2  |
-    and unfold record. add_cnt (if have) and dup_cnt   |0      |1      |2  |
-    will be set to default values which are 0 and 1    |0      |1      |3  |
-    Finally the table will be:                         |0      |1      |3  |
+    The call of send_eof() for the first operand swaps the values stored in
+    dup_cnt and add_cnt. After this, we'll see the following rows in the
+    temporary table
 
-  - For the query "select i from t2 EXCEPT ALL select i from t3":
-    Because the query doesn't contain INTERSECT, this time     |dup_cnt| i |
-    there is no additional_cnt in the table. When entering the |1      |1  |
-    first call to send_eof(), the table is like that:          |2      |2  |
-    And nothing will be done in this send_eof().               |3      |3  |
+      |add_cnt|dup_cnt| f |
+      |2      |0      |b  |
+      |3      |0      |a  |
+      |1      |0      |d  |
+      |2      |0      |c  |
 
-    In the second call to send_data(), we read record from the |dup_cnt| i |
-    second operand and decrease corresponding dup_cnt. If a    |2      |3  |
-    record's dup_cnt equal to 0 after a decrement that record
-    will be deleted.
+    When send_data() is called for the rows of the second operand we increment
+    the counter in dup_cnt if the processed row is found in the table and do
+    nothing otherwise. As a result we get
 
-    Finally, we disable index and unfold duplicate record in   |dup_cnt| i |
-    send_eof(). The table will be:                             |1      |3  |
-                                                               |1      |3  |
+      |add_cnt|dup_cnt| f |
+      |2      |2      |b  |
+      |3      |1      |a  |
+      |1      |0      |d  |
+      |2      |3      |c  |
+
+    At the call of send_eof() for the second operand first we disable index.
+    Then for each record, the minimum of counters from dup_cnt and add_cnt m is
+    taken. If m == 0 then the record is deleted. Otherwise record is replaced
+    with m copies of it. Yet the counter in this copies are set to 1 for
+    dup_cnt and to 0 for add_cnt
+
+      |add_cnt|dup_cnt| f |
+      |0      |1      |b  |
+      |0      |1      |b  |
+      |0      |1      |a  |
+      |0      |1      |c  |
+      |0      |1      |c  |
+
+  - Let's demonstrate how the the set operation EXCEPT ALL is proceesed
+    for the query
+              SELECT f FROM t1 EXCEPT ALL SELECT f FROM t3
+
+    Only one additional counter field dup_cnt is used for EXCEPT ALL.
+    After the first operand has been processed we have in the temporary table
+
+      |dup_cnt| f |
+      |2      |b  |
+      |3      |a  |
+      |1      |d  |
+      |2      |c  |
+
+    When send_data() is called for the rows of the second operand we decrement
+    the counter in dup_cnt if the processed row is found in the table and do
+    nothing otherwise. If the counter becomes 0 we delete the record
+
+      |dup_cnt| f |
+      |2      |a  |
+      |1      |c  |
+
+    Finally at the call of send_eof() for the second operand we disable index
+    unfold rows adding duplicates
+
+      |dup_cnt| f |
+      |1      |a  |
+      |1      |a  |
+      |1      |c  |
  */
 
 class select_unit_ext :public select_unit
@@ -5808,7 +5847,6 @@ public:
   };
   int send_data(List<Item> &items);
   void change_select();
-  /* Insert duplicate record to make the total number of a record equals to cnt */
   int unfold_record(int cnt);
   bool send_eof();
   bool force_enable_index_if_needed()
@@ -5816,28 +5854,27 @@ public:
     is_index_enabled= true;
     return true;
   }
-  bool disable_index_if_needed(SELECT_LEX *curr_sl) 
-  { 
-    if (is_index_enabled && 
-        (curr_sl == curr_sl->master_unit()->union_distinct || 
-         !curr_sl->next_select()) )
-    {
-      is_index_enabled= false;
-      table->file->ha_disable_indexes(HA_KEY_SWITCH_ALL);  
-      return true;
-    }
-    return false;
-  }
+  bool disable_index_if_needed(SELECT_LEX *curr_sl);
   
-  /* Value can be 1 or -1. Stands for insert or delete a record*/
+  /* 
+    How to change increment/decrement the counter in duplicate_cnt field 
+    when processing a record produced by the current operand in send_data().
+    The value can be 1 or -1
+  */
   int increment;
-  /* Indicate whether the index of result table is enabled or not */
+  /* TRUE <=> the index of the result temporary table is enabled */
   bool is_index_enabled;
-  /* Which operation is currently */
+  /* The type of the set operation currently executed */
   enum set_op_type curr_op_type;
-  /* Stores the value of duplicate counter */
+  /* 
+    Points to the extra field of the temporary table where
+    duplicate counters are stored
+  */ 
   Field *duplicate_cnt;
-  /* Stores the value of another counter will be used in INTERSECT ALL*/
+  /* 
+    Points to the extra field of the temporary table where additional
+    counters used only for INTERSECT ALL operations are stored
+  */
   Field *additional_cnt;
 };
 

@@ -38,15 +38,15 @@ a	b
 4	4
 select * from t1 except all select * from t1 union all select * from t1 union all select * from t1 except all select * from t2;
 a	b
+4	4
+2	2
+4	4
+4	4
+4	4
+4	4
+4	4
 2	2
 2	2
-2	2
-4	4
-4	4
-4	4
-4	4
-4	4
-4	4
 select * from (select * from t1 except all select * from t2) q1 except all select * from (select * from t1 except all select * from t2) q2;
 a	b
 EXPLAIN select * from t1 except all select * from t2;

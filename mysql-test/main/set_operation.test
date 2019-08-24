@@ -78,7 +78,7 @@ let $q=
     select * from t3
     UNION ALL
     select * from t1;
---sorted_result
+
 eval $q;
 eval EXPLAIN EXTENDED $q;
 drop table t4;
@@ -185,7 +185,7 @@ SELECT * from(
 
 --echo # integration test
 
---sorted_result
+
 select * from t1
 UNION ALL
 select * from t2
@@ -207,6 +207,28 @@ UNION ALL
 select * from t3;
 
 --sorted_result
+select * from t1
+UNION ALL
+select * from t2
+INTERSECT ALL
+(values (1,1), (2,2), (2,2), (5,5), (2,2))
+INTERSECT ALL
+select * from (select * from t1 union all select * from t1) sq
+EXCEPT ALL
+select * from t3
+UNION ALL
+select * from t2
+UNION
+select * from t3
+EXCEPT
+select a,c from t1,t2
+UNION ALL
+select * from v0 where g < 4
+UNION ALL
+select * from t3
+ORDER BY a;
+
+
 select * from (
     select * from t1
     UNION ALL
@@ -314,9 +336,9 @@ PREPARE stmt from"
     select * from t3
 ";
 
---sorted_result
+
 EXECUTE stmt;
---sorted_result
+
 EXECUTE stmt;
 deallocate prepare stmt;
 
@@ -452,21 +474,30 @@ insert into t2 select * from t2;
 insert into t2 select a+100, b+100 from t2;
 
 
-select * from t1
-INTERSECT ALL
-select * from t2;
+select count(*) from
+(
+    select * from t1
+    INTERSECT ALL
+    select * from t2
+) c;
 
-select * from t1
-EXCEPT ALL
-select * from t2;
+select count(*) from
+(
+    select * from t1
+    EXCEPT ALL
+    select * from t2
+) c;
 
-select * from t1
-INTERSECT ALL
-select * from t2
-UNION ALL
-select * from t1
-EXCEPT ALL
-select * from t2;
+select count(*) from
+(
+    select * from t1
+    INTERSECT ALL
+    select * from t2
+    UNION ALL
+    select * from t1
+    EXCEPT ALL
+    select * from t2
+) c;
 
 delete from t1;
 delete from t2;
@@ -482,11 +513,14 @@ insert into t2 select a+20, b+20 from t2;
 insert into t2 select a+40, b+40 from t2;
 insert into t2 select a+80, b+80 from t2;
 
-select * from t1
-UNION ALL
-select * from t2
-EXCEPT ALL
-values (1,1);
+select count(*) from
+(
+    select * from t1
+    UNION ALL
+    select * from t2
+    EXCEPT ALL
+    values (1,1)
+) c;
 
 drop table t1;
 drop table t2;
