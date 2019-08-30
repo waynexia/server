@@ -5847,7 +5847,7 @@ public:
   };
   int send_data(List<Item> &items);
   void change_select();
-  int unfold_record(longlong cnt);
+  int unfold_record(ha_rows cnt);
   bool send_eof();
   bool force_enable_index_if_needed()
   {
